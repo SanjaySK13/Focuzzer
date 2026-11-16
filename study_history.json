@@ -1,0 +1,56 @@
+[
+    {
+        "test": true,
+        "date": "2026-11-16 21:38:00",
+        "duration": 3600
+    },
+    {
+        "date": "2026-11-16 21:42:24",
+        "target_duration_mins": 30,
+        "actual_duration_seconds": 70,
+        "distractions_blocked": 57,
+        "hourly_checkins_completed": 0,
+        "completed_cleanly": false
+    },
+    {
+        "test": true,
+        "date": "2026-11-16",
+        "actual_duration_seconds": 3600,
+        "target_duration_mins": 60,
+        "distractions_blocked": 2,
+        "hourly_checkins_completed": 1,
+        "completed_cleanly": true
+    },
+    {
+        "date": "2026-11-16 21:47:03",
+        "target_duration_mins": 30,
+        "actual_duration_seconds": 179,
+        "distractions_blocked": 16,
+        "hourly_checkins_completed": 0,
+        "completed_cleanly": false
+    },
+    {
+        "date": "2026-11-16 21:48:34",
+        "target_duration_mins": 30,
+        "actual_duration_seconds": 30,
+        "distractions_blocked": 11,
+        "hourly_checkins_completed": 0,
+        "completed_cleanly": false
+    },
+    {
+        "date": "2026-11-16 22:25:02",
+        "target_duration_mins": 30,
+        "actual_duration_seconds": 1805,
+        "distractions_blocked": 45,
+        "hourly_checkins_completed": 0,
+        "completed_cleanly": true
+    },
+    {
+        "date": "2026-11-17 01:44:39",
+        "target_duration_mins": 30,
+        "actual_duration_seconds": 89,
+        "distractions_blocked": 3,
+        "hourly_checkins_completed": 0,
+        "completed_cleanly": false
+    }
+]
