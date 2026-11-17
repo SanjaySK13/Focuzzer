@@ -113,13 +113,12 @@ class HourlyCheckinDialog:
             self.dialog.attributes("-topmost", True)
             self._timer_id = self.dialog.after(1000, self._tick)
         else:
-            # Time expired without user response! Blast alarm!
+            # Time expired — just show warning; focus_guard._tick sees checkin_timed_out
+            # and starts alarm centrally. No direct start_alarm() here to avoid overlap.
             self.lbl_countdown.config(
                 text="🚨 TIME EXPIRED! CLICK BELOW TO CONFIRM & STOP ALARM!",
                 fg="#EF4444"
             )
-            if not self.alarm_manager.is_alarming():
-                self.alarm_manager.start_alarm()
             self.dialog.lift()
             self.dialog.attributes("-topmost", True)
             self._timer_id = self.dialog.after(1000, self._tick)

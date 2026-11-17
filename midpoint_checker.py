@@ -120,9 +120,10 @@ class MidpointCheckerDialog:
             self.dialog.attributes("-topmost", True)
             self._timer_id = self.dialog.after(1000, self._tick)
         else:
+            # Timed out — just show ALARM label; the main tick loop
+            # (focus_guard._tick) sees midpoint_timed_out=True and starts alarm.
+            # Do NOT call start_alarm() here to avoid double-alarm overlap.
             self.lbl_countdown.config(text="ALARM!", fg="#EF4444")
-            if not self.alarm_manager.is_alarming():
-                self.alarm_manager.start_alarm()
             self.dialog.lift()
             self.dialog.attributes("-topmost", True)
             self._timer_id = self.dialog.after(1000, self._tick)

@@ -174,9 +174,10 @@ class AlarmManager:
 
     def play_success_chime(self):
         def _chime():
+            time.sleep(0.3)  # brief pause so alarm stops before chime
             if _PYGAME_OK:
                 for hz, ms in [(523, 120), (659, 120), (784, 120), (1046, 220)]:
-                    snd = pygame.mixer.Sound(io.BytesIO(_make_wav(hz, ms, volume=0.5)))
+                    snd = pygame.mixer.Sound(io.BytesIO(_make_wav(hz, ms, volume=0.25)))
                     snd.play()
                     time.sleep(ms / 1000 + 0.02)
             elif _WINSOUND_OK:

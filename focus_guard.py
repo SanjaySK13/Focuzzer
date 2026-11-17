@@ -524,27 +524,34 @@ class FocusGuardApp:
         if self.hud:
             self.hud.update_focus_state(ev)
 
+        # Is a midpoint/check-in modal currently demanding attention?
+        checkin_timed_out  = (self.active_checkin  is not None
+                              and self.active_checkin.remaining_seconds  <= 0)
+        midpoint_timed_out = (self.active_midpoint is not None
+                              and self.active_midpoint.remaining_seconds <= 0)
+        modal_alarm_active = checkin_timed_out or midpoint_timed_out
+
         if ev["status"] == "violation":
             # Count ONLY ONCE per distraction episode!
             if not self._in_violation_state:
                 self._in_violation_state = True
                 self.distraction_count += 1
 
-            if not self.alarm_manager.is_alarming():
+            # Only start tab-violation alarm if no modal alarm is already sounding
+            if not self.alarm_manager.is_alarming() and not modal_alarm_active:
                 self.alarm_manager.start_alarm()
+
         else:
-            # User is back on an allowed study window
-            self._in_violation_state = False
-
-            # Check if any check-in modal has timed out
-            checkin_timed_out = (self.active_checkin is not None
-                                 and self.active_checkin.remaining_seconds <= 0)
-            midpoint_timed_out = (self.active_midpoint is not None
-                                  and self.active_midpoint.remaining_seconds <= 0)
-
-            # Silence alarm immediately when returning to study tabs
-            if not checkin_timed_out and not midpoint_timed_out and self.alarm_manager.is_alarming():
-                self.alarm_manager.stop_alarm()
+            # Bug fix: clicking the Focuzzer pill makes it the foreground window (allowed)
+            # while still on a restricted site — don't stop alarm or reset violation state.
+            is_focuzzer_focus = ev.get("matched_item", "") in ("Focuzzer", "System")
+            if is_focuzzer_focus and self._in_violation_state:
+                pass  # keep alarm running, don't reset state
+            else:
+                self._in_violation_state = False
+                # Silence tab-violation alarm; leave modal alarms alone
+                if not modal_alarm_active and self.alarm_manager.is_alarming():
+                    self.alarm_manager.stop_alarm()
 
         # Fast 100ms polling for INSTANT (<0.1s) tab switch detection
         self._mon_id = self.root.after(100, self._tick)

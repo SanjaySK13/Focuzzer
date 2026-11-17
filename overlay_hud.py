@@ -164,6 +164,8 @@ class OverlayHUD:
         else:
             if not self.session_done:
                 self.session_done = True
+                # Stop any active alarm first, then play soft chime after a moment
+                self.alarm_manager.stop_alarm()
                 self.alarm_manager.play_success_chime()
             self.lbl_lock.config(text="🎉  Target reached — you may now stop", fg=GREEN)
             self.btn_off.config(text="🛑  End Session",
