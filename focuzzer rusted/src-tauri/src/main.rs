@@ -25,12 +25,17 @@ struct Plan {
     sound: bool,
     #[serde(default)]
     sites: String,
+    #[serde(default)]
+    blocked_sites: String,
+    #[serde(default)]
+    blocklist_mode: bool,
 }
 
 struct Running {
     plan: Plan,
     started: Instant,
     rules: Vec<String>,
+    blocked_rules: Vec<String>,
     distractions: u32,
     in_distraction: bool,
     blocked_site: Option<String>,
@@ -84,6 +89,7 @@ fn begin(plan: Plan, session: State<Session>) -> Result<(), String> {
         || !matches!(plan.style.as_str(), "digits" | "fill")
         || plan.goal.chars().count() > 100
         || plan.sites.len() > 2000
+        || plan.blocked_sites.len() > 2000
     {
         return Err("Check the session settings and try again.".into());
     }
@@ -92,6 +98,7 @@ fn begin(plan: Plan, session: State<Session>) -> Result<(), String> {
         return Err("A session is already running.".into());
     }
     let mut rules = Vec::new();
+    let mut blocked_rules = Vec::new();
     #[cfg(windows)]
     for value in plan
         .sites
@@ -105,10 +112,20 @@ fn begin(plan: Plan, session: State<Session>) -> Result<(), String> {
         }
         rules.push(host.trim_start_matches("www.").to_owned());
     }
+    for value in plan
+        .blocked_sites
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|s| !s.is_empty())
+    {
+        let host = focus::host(value)
+            .ok_or_else(|| format!("Enter a blocked domain or URL for {value}."))?;
+        blocked_rules.push(host.trim_start_matches("www.").to_owned());
+    }
     *state = Some(Running {
         plan,
         started: Instant::now(),
         rules,
+        blocked_rules,
         distractions: 0,
         in_distraction: false,
         blocked_site: None,
@@ -347,7 +364,39 @@ fn show_dashboard(app: AppHandle) -> Result<(), String> {
     window(&app, "pill")?.hide().map_err(|e| e.to_string())
 }
 
+struct InstanceGuard(windows_sys::Win32::Foundation::HANDLE);
+
+impl Drop for InstanceGuard {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+fn single_instance() -> Option<InstanceGuard> {
+    use windows_sys::Win32::{
+        Foundation::{GetLastError, ERROR_ALREADY_EXISTS},
+        System::Threading::CreateMutexW,
+    };
+    let name: Vec<u16> = "Local\\FocuzzerRustedSession"
+        .encode_utf16()
+        .chain([0])
+        .collect();
+    unsafe {
+        let handle = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
+        if handle.is_null() {
+            return None;
+        }
+        let guard = InstanceGuard(handle);
+        (GetLastError() != ERROR_ALREADY_EXISTS).then_some(guard)
+    }
+}
+
 fn main() {
+    let Some(_instance) = single_instance() else {
+        return;
+    };
     tauri::Builder::default()
         .manage(Session::default())
         .setup(|app| {

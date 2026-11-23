@@ -136,7 +136,7 @@ function status(id, message = "") {
 }
 
 const settings = {
-  minutes: 25, goal: "", style: "digits", sound: true, sites: "",
+  minutes: 25, goal: "", style: "digits", sound: true, sites: "", blockedSites: "", blocklistMode: false,
   ...stored("rusted-plan", {}),
 };
 
@@ -231,6 +231,14 @@ if (!pillPage && !alarmPage && !quitPage && !reminderPage) {
   $("minutes").value = settings.minutes;
   $("goal").value = settings.goal;
   $("sites").value = settings.sites;
+  $("blocked-sites").value = settings.blockedSites;
+  $("site-mode").value = settings.blocklistMode ? "blocklist" : "allowlist";
+  function updateSiteMode() {
+    settings.blocklistMode = $("site-mode").value === "blocklist";
+    for (const id of ["sites", "sites-label", "site-defaults"]) $(id).hidden = settings.blocklistMode;
+  }
+  $("site-mode").onchange = updateSiteMode;
+  updateSiteMode();
   updateSettings();
   void refreshHistory();
   window.addEventListener("focus", refreshHistory);
@@ -252,6 +260,7 @@ if (!pillPage && !alarmPage && !quitPage && !reminderPage) {
       if (!pendingHandoff) {
         settings.goal = $("goal").value.trim();
         settings.sites = $("sites").value.trim();
+        settings.blockedSites = $("blocked-sites").value.trim();
         saveLocal("rusted-plan", settings);
         await command("begin", { plan: { ...settings } });
         pendingHandoff = true;

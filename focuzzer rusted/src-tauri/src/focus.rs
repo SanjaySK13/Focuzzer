@@ -29,7 +29,8 @@ use windows::{
         UI::{
             Accessibility::*,
             WindowsAndMessaging::{
-                GetForegroundWindow, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
+                GetAncestor, GetForegroundWindow, GetWindowRect, GetWindowTextW,
+                GetWindowThreadProcessId, GA_ROOTOWNER,
             },
         },
     },
@@ -60,17 +61,23 @@ pub fn host(value: &str) -> Option<String> {
     (name.contains('.') || name == "localhost").then(|| name.to_ascii_lowercase())
 }
 
-fn allowed(host: &str, rules: &[String]) -> bool {
-    DEFAULT_SITES
+fn domain_matches(host: &str, rule: &str) -> bool {
+    host == rule
+        || host
+            .strip_suffix(rule)
+            .is_some_and(|prefix| prefix.ends_with('.'))
+}
+
+fn should_block(host: &str, run: &crate::Running) -> bool {
+    run.blocked_rules
         .iter()
-        .copied()
-        .chain(rules.iter().map(String::as_str))
-        .any(|rule| {
-            host == rule
-                || host
-                    .strip_suffix(rule)
-                    .is_some_and(|prefix| prefix.ends_with('.'))
-        })
+        .any(|rule| domain_matches(host, rule))
+        || (!run.plan.blocklist_mode
+            && !DEFAULT_SITES
+                .iter()
+                .copied()
+                .chain(run.rules.iter().map(String::as_str))
+                .any(|rule| domain_matches(host, rule)))
 }
 
 enum Reading {
@@ -79,6 +86,8 @@ enum Reading {
     Unknown(Option<String>),
     Site { host: String, title: Option<String> },
     NewTab,
+    Editing,
+    History,
 }
 
 const NEW_TAB_GRACE: Duration = Duration::from_secs(6);
@@ -124,14 +133,16 @@ fn is_new_tab(address: &str) -> bool {
     )
 }
 
-type AddressCache = Option<(HWND, IUIAutomationValuePattern)>;
+type AddressCache = Option<(HWND, IUIAutomationElement, IUIAutomationValuePattern)>;
 
 fn foreground(automation: Option<&IUIAutomation>, cache: &mut AddressCache) -> Reading {
     unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.0.is_null() {
+        let foreground = GetForegroundWindow();
+        if foreground.0.is_null() {
             return Reading::Unknown(None);
         }
+        let owner = GetAncestor(foreground, GA_ROOTOWNER);
+        let hwnd = if owner.0.is_null() { foreground } else { owner };
         let mut pid = 0;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
         if pid == std::process::id() {
@@ -171,21 +182,36 @@ fn foreground(automation: Option<&IUIAutomation>, cache: &mut AddressCache) -> R
         }
         let title = tab_title(hwnd);
         let result = automation.and_then(|uia| address(uia, hwnd, cache));
-        if GetForegroundWindow() != hwnd {
+        if GetForegroundWindow() != foreground {
             return Reading::Unknown(None);
         }
-        if let Some(host) = result.as_deref().and_then(host) {
-            return Reading::Site { host, title };
-        }
-        if result.as_deref().is_some_and(is_new_tab)
+        let (value, editing) = result
+            .as_ref()
+            .map_or(("", false), |(value, editing)| (value.as_str(), *editing));
+        let new_tab = is_new_tab(value)
             || title.as_deref().is_some_and(|title| {
                 matches!(
                     title.to_ascii_lowercase().as_str(),
                     "new tab" | "new tab page" | "start page" | "speed dial"
                 )
-            })
-        {
+            });
+        if editing && !(new_tab && (value.is_empty() || is_new_tab(value))) {
+            return Reading::Editing;
+        }
+        if let Some(host) = host(value) {
+            return Reading::Site { host, title };
+        }
+        if new_tab {
             Reading::NewTab
+        } else if matches!(
+            value.to_ascii_lowercase().trim_end_matches('/'),
+            "brave://history"
+                | "chrome://history"
+                | "edge://history"
+                | "vivaldi://history"
+                | "opera://history"
+        ) {
+            Reading::History
         } else {
             Reading::Unknown(title)
         }
@@ -196,11 +222,13 @@ unsafe fn address(
     automation: &IUIAutomation,
     hwnd: HWND,
     cache: &mut AddressCache,
-) -> Option<String> {
-    if let Some((owner, pattern)) = cache {
+) -> Option<(String, bool)> {
+    if let Some((owner, edit, pattern)) = cache {
         if *owner == hwnd {
             if let Ok(value) = pattern.CurrentValue() {
-                return Some(value.to_string().trim().to_owned());
+                if let Ok(focused) = edit.CurrentHasKeyboardFocus() {
+                    return Some((value.to_string().trim().to_owned(), focused.as_bool()));
+                }
             }
         }
     }
@@ -252,8 +280,9 @@ unsafe fn address(
             edit.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
         {
             if let Ok(value) = pattern.CurrentValue() {
-                *cache = Some((hwnd, pattern));
-                return Some(value.to_string().trim().to_owned());
+                let focused = edit.CurrentHasKeyboardFocus().ok()?.as_bool();
+                *cache = Some((hwnd, edit, pattern));
+                return Some((value.to_string().trim().to_owned(), focused));
             }
         }
     }
@@ -377,7 +406,7 @@ pub fn start(
                         Some(Reading::Site { host, title }) => {
                             run.new_tab_since = None;
                             run.active_tab = title.or_else(|| Some(host.clone()));
-                            run.blocked_site = (!allowed(&host, &run.rules)).then_some(host);
+                            run.blocked_site = should_block(&host, run).then_some(host);
                             if run.blocked_site.is_none() {
                                 run.in_distraction = false;
                             }
@@ -387,6 +416,16 @@ pub fn start(
                             let opened = run.new_tab_since.get_or_insert_with(Instant::now);
                             run.blocked_site = (opened.elapsed() >= NEW_TAB_GRACE)
                                 .then(|| "New tab left open".to_owned());
+                        }
+                        Some(Reading::History) => {
+                            run.active_tab = Some("Browser history".into());
+                            run.new_tab_since = None;
+                            run.blocked_site = Some("Browser history".into());
+                        }
+                        Some(Reading::Editing) => {
+                            run.active_tab = Some("Typing address".into());
+                            run.new_tab_since = None;
+                            run.blocked_site = None;
                         }
                         Some(Reading::Desktop) => {
                             run.active_tab = None;
@@ -423,14 +462,16 @@ pub fn start(
             }
             if showing != blocked {
                 if let Some(window) = app.get_webview_window("alarm") {
-                    let _ = if blocked {
+                    let result = if blocked {
                         size_distraction_banner(&window);
                         window.show()
                     } else {
                         window.hide()
                     };
+                    if result.is_ok() {
+                        showing = blocked;
+                    }
                 }
-                showing = blocked;
                 if blocked && reminder_visible && reminder_pending {
                     use windows_sys::Win32::UI::WindowsAndMessaging::{
                         SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,

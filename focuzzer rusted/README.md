@@ -25,3 +25,5 @@ Open http://127.0.0.1:4173. In browser preview mode, the floating timer stays in
 The interface audio comes from [Kenney Interface Sounds](https://kenney.nl/assets/interface-sounds), licensed CC0. The selected clips and license are bundled in `ui/sounds`.
 
 Windows focus enforcement reads supported browsers' address bars directly through UI Automation. Confirmed sites outside the allowlist trigger a banner and an alternating alarm tone at full device volume. Focuzzer restores the previous volume and mute setting when the alarm stops. A browser address that Windows cannot verify does not trigger the alarm. Session history records distraction episodes and supports deleting individual entries. Migration from the Python app remains to be ported.
+
+**Allowlist only** is the default. It allows the built-in study sites and any domains you add. **Blocklist only** allows ordinary sites unless you list them under **Blocked websites**. An explicit blocked domain takes precedence in either mode. Browser History and a new tab left idle for six seconds still trigger the alarm in both modes. Focuzzer waits while you edit the address bar and checks the loaded page afterward.

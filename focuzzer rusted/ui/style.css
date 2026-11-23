@@ -25,6 +25,7 @@ h1{font-size:clamp(36px,5.2vw,64px);letter-spacing:-.067em;font-weight:740;line-
 .setup label{font-size:13px;font-weight:700;margin:21px 0 8px}
 .field-note{font-size:12px;color:var(--muted);margin-top:8px;line-height:1.45}
 .setup input{width:100%;min-width:0;padding:11px 12px;border:1px solid #ded9ed;border-radius:11px;background:#faf9ff;color:#24243b}
+.setup select{font:inherit;width:100%;padding:10px 12px;border:1px solid #ded9ed;border-radius:11px;background:#faf9ff;color:#24243b}
 .duration{display:flex;align-items:center;gap:10px}
 .segmented{display:flex;align-items:center;gap:3px;padding:4px;background:#ebe7f5;border-radius:12px}
 .segmented button{flex:1;white-space:nowrap;background:transparent;border-radius:8px;padding:8px 10px;font-size:12px;font-weight:650;transition:background .16s,color .16s,transform .16s}

@@ -28,9 +28,14 @@
         </div>
         <div class="minute-field"><input id="minutes" name="minutes" type="number" min="1" max="180" value="25" required><span>min</span></div>
       </div>
-      <label for="sites">Extra allowed websites</label>
+      <label for="site-mode">Website rules</label>
+      <select id="site-mode"><option value="allowlist">Allowlist only</option><option value="blocklist">Blocklist only</option></select>
+      <label for="sites" id="sites-label">Extra allowed websites</label>
       <input id="sites" name="sites" maxlength="2000" placeholder="meet.google.com, example.edu" aria-describedby="site-defaults">
       <p id="site-defaults" class="field-note">ChatGPT, Gemini, NotebookLM, and WhatsApp are included.</p>
+      <label for="blocked-sites">Blocked websites</label>
+      <input id="blocked-sites" name="blockedSites" maxlength="2000" placeholder="youtube.com, x.com">
+      <p class="field-note">Blocked websites override allowed ones. Browser History is always blocked.</p>
       <button class="primary" type="submit" id="start"><span>Start challenge</span><span aria-hidden="true">↗</span></button>
       <p id="dashboard-status" role="status" hidden></p>
     </form>
