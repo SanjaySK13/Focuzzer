@@ -4,6 +4,7 @@ import time
 import ctypes
 from math import sqrt
 from emergency_dialog import EmergencyUnlockDialog
+from config import load_private_exit_verifier
 from appearance import GLASS, GLASS_EDGE, apple_color, round_rect, rounded_window_region, style_widgets, style_window
 
 TRANSPARENT_CORNER = "#ff00fe"
@@ -209,9 +210,10 @@ class OverlayHUD:
         else:
             if not self.session_done:
                 self.session_done = True
-                # Stop any active alarm first, then play soft chime after a moment
+                self._hide_warning()
+                self.btn_emerg.pack_forget()
                 self.alarm_manager.stop_alarm()
-                self.alarm_manager.play_success_chime()
+                self.alarm_manager.play_session_music("victory")
             self.lbl_lock.config(text="Goal reached" if self.apple else "🎉  Target reached — you may now stop", fg=GREEN)
             self.btn_off.config(text="End session" if self.apple else "🛑  End Session",
                                 state=tk.NORMAL,
@@ -250,14 +252,15 @@ class OverlayHUD:
             self.dot.config(fg=AMBER, bg=warning_bg)
             self.lbl_status.config(text=f"NEW TAB — {gl}s to navigate",
                                    fg=AMBER, bg=warning_bg)
-            self.lbl_detail.config(text="Open NotebookLM, Gemini, or WhatsApp",
+            self.lbl_detail.config(text="Open an allowed site",
                                    fg="#FDE68A", bg=warning_bg)
             self._hide_warning()
 
-        elif st == "checking":
+        elif st in ("checking", "unverified"):
             self.inner.config(bg=card_bg)
             self.dot.config(fg=AMBER, bg=card_bg)
-            self.lbl_status.config(text="CHECKING BROWSER", fg=AMBER, bg=card_bg)
+            label = "CHECKING BROWSER" if st == "checking" else "ADDRESS UNAVAILABLE"
+            self.lbl_status.config(text=label, fg=AMBER, bg=card_bg)
             self.lbl_detail.config(text=short, fg=TEXT_MID, bg=card_bg)
             self._hide_warning()
 
@@ -311,7 +314,7 @@ class OverlayHUD:
             self.lbl_warn_site.pack(pady=(0, 6))
 
             tk.Label(inner,
-                     text="Allowed: NotebookLM  |  Gemini  |  WhatsApp",
+                     text="Switch to an allowed site or study app",
                      font=("Segoe UI", 12, "bold"),
                      bg=background, fg="#FCA5A5").pack()
             self.warning_win.deiconify()
@@ -333,12 +336,15 @@ class OverlayHUD:
             self.on_session_end(normal_exit=True)
 
     def _emergency(self):
-        EmergencyUnlockDialog(self.root, self._emergency_confirmed, apple=self.apple)
+        EmergencyUnlockDialog(
+            self.root, self._emergency_confirmed, apple=self.apple,
+            private_exit_verifier=load_private_exit_verifier(),
+        )
 
     def _emergency_confirmed(self):
         self._hide_warning()
         self.alarm_manager.stop_alarm()
-        self.on_session_end(normal_exit=False)
+        self.on_session_end(normal_exit=self.session_done)
 
     def _attempt_close(self):
         if self.session_done:

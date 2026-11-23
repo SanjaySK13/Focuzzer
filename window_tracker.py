@@ -1,7 +1,9 @@
 import time
 from concurrent.futures import ThreadPoolExecutor
 import ctypes
+import os
 import re
+import sys
 from urllib.parse import urlsplit
 import subprocess
 
@@ -26,8 +28,14 @@ _PS_GET_URL = (
     "$edits = $h.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond); "
     "foreach ($el in $edits) {{ "
     "  if ($el.Current.AutomationId -notin @('urlbar-input','addressEditBox','omnibox') "
-    "      -and $el.Current.Name -notin @('Address and search bar','Search or enter address',"
-    " 'Search with Google or enter address','Search with Bing or enter address','Address bar')) {{ continue }}; "
+    "      -and $el.Current.Name -notmatch 'address (and search )?bar|enter (an? )?address|type (an? )?url') {{ continue }}; "
+    "  $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker; "
+    "  $parent = $walker.GetParent($el); $isPage = $false; "
+    "  while ($parent -and -not $parent.Equals($h)) {{ "
+    "    if ($parent.Current.ControlType -eq [System.Windows.Automation.ControlType]::Document) "
+    "      {{ $isPage = $true; break }}; "
+    "    $parent = $walker.GetParent($parent) }}; "
+    "  if ($isPage) {{ continue }}; "
     "  $value = $null; "
     "  if ($el.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$value)) {{ "
     "    Write-Output $value.Current.Value; break }} }}"
@@ -41,7 +49,7 @@ def _get_browser_url(hwnd):
     try:
         cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
                _PS_GET_URL.format(hwnd=hwnd)]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1.5,
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=2.0,
                                 creationflags=0x08000000)  # CREATE_NO_WINDOW
         url = result.stdout.strip().lower()
         return url
@@ -190,7 +198,8 @@ class WindowTracker:
                     "matched_item": "System", "grace_time_left": None}
 
         # 2. Focuzzer itself
-        if proc_lower.startswith("python") and title_lower.startswith(("focuzzer", "focusguard", "focus guard")):
+        own_process = proc_lower == os.path.basename(sys.executable).lower()
+        if own_process and title_lower.startswith(("focuzzer", "focusguard", "focus guard")):
             return {"status": "neutral", "reason": "Focuzzer Overlay",
                     "title": title, "process": proc_name,
                     "matched_item": "Focuzzer", "grace_time_left": None}
@@ -267,6 +276,10 @@ class WindowTracker:
                             "matched_item": "New Tab Timeout", "grace_time_left": 0}
 
             self.grace_start_time = None
+            if not host:
+                return {"status": "unverified", "reason": "Browser address unavailable",
+                        "title": title, "process": proc_name,
+                        "matched_item": None, "grace_time_left": None}
             return {"status": "violation",
                     "reason": f"Unauthorized Site: '{clean_title or title}' (Not in Whitelist)",
                     "title": title or clean_title, "process": proc_name,

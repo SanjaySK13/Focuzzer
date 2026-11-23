@@ -2,6 +2,7 @@ import tkinter as tk
 import random
 import string
 from appearance import style_dialog
+from config import verify_private_exit
 
 # Unambiguous characters (excludes easily confused: 0, O, o, 1, l, I)
 CHALLENGE_CHARS = "23456789abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ!@#$%&*?="
@@ -26,9 +27,12 @@ def generate_jumbled_string(length=26):
     return "".join(combined)
 
 class EmergencyUnlockDialog:
-    def __init__(self, parent, on_unlock_granted, *, apple=False):
+    def __init__(self, parent, on_unlock_granted, *, apple=False, private_exit_verifier=None):
         self.parent = parent
         self.on_unlock_granted = on_unlock_granted
+        self.private_exit_verifier = private_exit_verifier
+        self._checked_private_input = None
+        self._private_input_matches = False
         self.target_phrase = generate_jumbled_string(26)
         
         self.dialog = tk.Toplevel(parent)
@@ -179,6 +183,7 @@ class EmergencyUnlockDialog:
         self.entry.bind("<Shift-Insert>", lambda e: "break")
         self.entry.bind("<<Paste>>", lambda e: "break")
         self.entry.bind("<Button-3>", lambda e: "break")
+        self.entry.bind("<Return>", self._submit_entry)
 
         # Status & character counter
         status_row = tk.Frame(frame, bg="#0B0F19")
@@ -257,7 +262,7 @@ class EmergencyUnlockDialog:
             self._set_quit_enabled(False)
             return
 
-        if typed == target:
+        if self._can_quit(typed):
             # 100% Exact match!
             self.lbl_status.config(text="✓ CHALLENGE VERIFIED! You may quit now.", fg="#10B981")
             self.lbl_counter.config(fg="#10B981")
@@ -296,6 +301,21 @@ class EmergencyUnlockDialog:
             )
 
     def _confirm_quit(self):
-        if self.entry_var.get() == self.target_phrase:
-            self.dialog.destroy()
-            self.on_unlock_granted()
+        if self._can_quit(self.entry_var.get()):
+            self._quit()
+
+    def _submit_entry(self, _event):
+        self._confirm_quit()
+        return "break"
+
+    def _can_quit(self, typed):
+        if typed == self.target_phrase:
+            return True
+        if typed != self._checked_private_input:
+            self._checked_private_input = typed
+            self._private_input_matches = verify_private_exit(typed, self.private_exit_verifier)
+        return self._private_input_matches
+
+    def _quit(self):
+        self.dialog.destroy()
+        self.on_unlock_granted()

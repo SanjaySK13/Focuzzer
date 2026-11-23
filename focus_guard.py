@@ -294,7 +294,7 @@ class FocusGuardApp:
         # Left Column
         col_left = tk.Frame(sites_grid, bg=BG_CARD)
         col_left.pack(side="left", fill="x", expand=True)
-        for text in ["✓ NotebookLM (notebooklm.google.com)", "✓ Gemini (gemini.google.com)"]:
+        for text in ["✓ NotebookLM", "✓ Gemini", "✓ ChatGPT"]:
             tk.Label(col_left, text=text, font=("Segoe UI", 9, "bold"),
                      bg=BG_CARD, fg=GREEN).pack(anchor="w", pady=1)
 
@@ -500,7 +500,7 @@ class FocusGuardApp:
 
         # Confirm lock commitment
         h_str = f"{self.target_seconds // 3600}h {(self.target_seconds % 3600) // 60}m"
-        wl_summary = "NotebookLM, Gemini, WhatsApp"
+        wl_summary = "NotebookLM, Gemini, ChatGPT, WhatsApp"
         if raw_extra:
             wl_summary += f", {raw_extra}"
 
@@ -540,6 +540,7 @@ class FocusGuardApp:
         self.hud = OverlayHUD(hud_win, self.target_seconds,
                               self.config, self.alarm_manager,
                               self._end_session)
+        self.alarm_manager.play_session_music("start")
         self._tick()
 
     def _tick(self):
@@ -551,6 +552,15 @@ class FocusGuardApp:
 
         if self.hud:
             self.hud.update_timers()
+            if self.hud.session_done:
+                for prompt in (self.active_checkin, self.active_midpoint):
+                    if prompt is not None:
+                        if prompt._timer_id is not None:
+                            prompt.dialog.after_cancel(prompt._timer_id)
+                        prompt.dialog.destroy()
+                self.active_checkin = None
+                self.active_midpoint = None
+                return
 
         # ── 1. Midpoint Focus Checker: (Halfway ± 10s) ───────────────────────
         can_prompt = (self.var_hourly.get() and elapsed < self.target_seconds
@@ -599,11 +609,11 @@ class FocusGuardApp:
                 self._in_violation_state = True
                 self.distraction_count += 1
 
-        elif ev["status"] not in ("neutral", "checking"):
+        elif ev["status"] not in ("neutral", "checking", "unverified"):
             self._in_violation_state = False
 
         should_alarm = modal_alarm_active or (
-            self._in_violation_state and ev["status"] != "checking"
+            self._in_violation_state and ev["status"] not in ("checking", "unverified")
         )
         if should_alarm and not self.alarm_manager.is_alarming():
             self.alarm_manager.start_alarm()
@@ -657,7 +667,6 @@ class FocusGuardApp:
         self._load_history()
 
         if normal_exit:
-            self.alarm_manager.play_success_chime()
             self._message("showinfo",
                 "Session Complete 🎉",
                 f"You achieved your study goal!\n\n"
@@ -667,9 +676,10 @@ class FocusGuardApp:
                 "Saved to Study History.",
                 parent=self.root)
         else:
+            self.alarm_manager.play_session_music("game_over")
             self._message("showwarning",
                 "Session Overridden",
-                f"Study session ended early via jumbled challenge.\n\n"
+                f"Study session ended early.\n\n"
                 f"⏱  Time Studied  :  {mins}m {s}s\n"
                 f"🚫  Distraction Episodes  :  {self.distraction_count}",
                 parent=self.root)

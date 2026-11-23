@@ -1,8 +1,12 @@
 from copy import deepcopy
+import hashlib
+import hmac
 import json
 import os
 import re
 import sys
+
+CHATGPT_HOSTS = ("chatgpt.com", "chat.openai.com")
 
 DEFAULT_CONFIG = {
     "appearance": "basic",
@@ -12,7 +16,8 @@ DEFAULT_CONFIG = {
         "notebooklm",
         "notebook lm",
         "gemini",
-        "whatsapp"
+        "whatsapp",
+        *CHATGPT_HOSTS,
     ],
     # Local desktop study apps allowed by default (notes, code, pdfs)
     "allowed_app_keywords": [
@@ -121,6 +126,10 @@ DEFAULT_CONFIG = {
 DATA_DIR = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
 CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 HISTORY_FILE = os.path.join(DATA_DIR, "study_history.json")
+PRIVATE_EXIT_FILE = os.path.join(DATA_DIR, ".focuzzer-private-exit")
+USER_PRIVATE_EXIT_FILE = os.path.join(
+    os.path.expanduser("~"), "AppData", "Local", "Focuzzer", ".focuzzer-private-exit"
+)
 
 GOOGLE_MEET_HOST = "meet.google.com"
 GOOGLE_MEET_HOSTS = {GOOGLE_MEET_HOST, "gmeet.com"}
@@ -197,10 +206,41 @@ def load_config():
                     config["allowed_site_keywords"] = list(DEFAULT_CONFIG["allowed_site_keywords"])
                     config["instant_alarm_keywords"] = list(DEFAULT_CONFIG["instant_alarm_keywords"])
                 config["session_allowlist_version"] = 1
+                config["allowed_site_keywords"] = list(dict.fromkeys([
+                    *config["allowed_site_keywords"], *CHATGPT_HOSTS,
+                ]))
                 return config
         except Exception:
             pass
     return deepcopy(DEFAULT_CONFIG)
+
+
+def load_private_exit_verifier():
+    for path in (USER_PRIVATE_EXIT_FILE, PRIVATE_EXIT_FILE):
+        try:
+            with open(path, encoding="ascii") as file:
+                verifier = file.read().strip()
+            if verifier:
+                return verifier
+        except (OSError, UnicodeError):
+            continue
+    return None
+
+
+def verify_private_exit(candidate, verifier):
+    """Check the local shortcut without storing its plaintext."""
+    if not verifier:
+        return False
+    try:
+        salt_hex, digest_hex = verifier.split(":", 1)
+        salt = bytes.fromhex(salt_hex)
+        expected = bytes.fromhex(digest_hex)
+    except (AttributeError, ValueError):
+        return False
+    if len(salt) != 16 or len(expected) != 32:
+        return False
+    digest = hashlib.pbkdf2_hmac("sha256", candidate.encode("utf-8"), salt, 200_000)
+    return hmac.compare_digest(digest, expected)
 
 def save_config(config):
     try:

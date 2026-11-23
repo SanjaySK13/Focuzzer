@@ -4,6 +4,8 @@ import io
 import struct
 import math
 import ctypes
+import wave
+from array import array
 
 try:
     import pygame
@@ -45,6 +47,46 @@ def _make_wav(hz, duration_ms, volume=0.9, sample_rate=44100):
 # Pre-synthesize two alarm tones at startup
 _HIGH_WAV = _make_wav(2600, 1600)   # 1.6s high tone
 _LOW_WAV  = _make_wav(2100, 1600)   # 1.6s low tone
+
+_SESSION_CUES = {
+    "start": (2.5, (
+        (0.00, 0.22, (45, 69)), (0.25, 0.16, (76,)), (0.44, 0.22, (52, 71)),
+        (0.70, 0.17, (76,)), (0.91, 0.30, (54, 73, 81)),
+        (1.25, 0.20, (78,)), (1.55, 0.95, (45, 57, 68, 71, 76)),
+    )),
+    "victory": (3.0, (
+        (0.00, 0.24, (60, 72)), (0.25, 0.24, (64, 76)), (0.50, 0.24, (67, 79)),
+        (0.75, 0.40, (60, 72, 84)), (1.25, 0.30, (67, 79)),
+        (1.65, 1.35, (48, 60, 67, 76, 84)),
+    )),
+    "game_over": (3.0, (
+        (0.00, 0.35, (55, 74)), (0.38, 0.36, (51, 70)), (0.77, 0.37, (48, 67)),
+        (1.18, 0.37, (45, 63)), (1.62, 1.38, (36, 48, 51, 55)),
+    )),
+}
+
+
+def _make_session_music(cue):
+    """Render a short synth phrase with softened note edges."""
+    duration, notes = _SESSION_CUES[cue]
+    rate = 44100
+    samples = array("h", [0]) * round(duration * rate)
+    for delay, duration, chord in notes:
+        start = round(delay * rate)
+        length = min(round(duration * rate), len(samples) - start)
+        phases = [math.tau * 440 * 2 ** ((note - 69) / 12) / rate for note in chord]
+        for index in range(length):
+            attack = min(1.0, index / (rate * 0.018))
+            release = min(1.0, (length - index - 1) / min(length, rate * 0.25))
+            signal = sum(math.sin(phase * index) + 0.18 * math.sin(2 * phase * index)
+                         for phase in phases) / len(phases)
+            samples[start + index] = int(7000 * signal * attack * release)
+    output = io.BytesIO()
+    with wave.open(output, "wb") as wav:
+        wav.setparams((1, 2, rate, 0, "NONE", "not compressed"))
+        wav.writeframes(samples.tobytes())
+    return output.getvalue()
+
 
 if _PYGAME_OK:
     _snd_high = pygame.mixer.Sound(io.BytesIO(_HIGH_WAV))
@@ -137,10 +179,6 @@ class AlarmManager:
 
             cycle += 1
 
-        # Always silence pygame when loop exits
-        if _PYGAME_OK:
-            pygame.mixer.stop()
-
     def _sleep_interruptible(self, seconds):
         """Sleep in small increments so stop_alarm() takes effect within ~50ms."""
         end = time.time() + seconds
@@ -161,7 +199,8 @@ class AlarmManager:
             self._alarming = False
         if _PYGAME_OK:
             try:
-                pygame.mixer.stop()
+                _snd_high.stop()
+                _snd_low.stop()
             except Exception:
                 pass
 
@@ -171,6 +210,18 @@ class AlarmManager:
 
     def shutdown(self):
         self.stop_alarm()
+        if _PYGAME_OK:
+            pygame.mixer.stop()
+
+    def play_session_music(self, cue):
+        def play():
+            audio = _make_session_music(cue)
+            if _PYGAME_OK:
+                pygame.mixer.Sound(io.BytesIO(audio)).play()
+            elif _WINSOUND_OK:
+                _winsound.PlaySound(audio, _winsound.SND_MEMORY)
+
+        threading.Thread(target=play, daemon=True).start()
 
     def play_success_chime(self):
         def _chime():
