@@ -18,6 +18,8 @@ Navigate to the `focusguard` folder:
 
 ## 🔒 How It Works
 
+Use the **Style** picker on the main screen to switch between **Basic** and **Apple**. Focuzzer remembers your choice. Apple style uses translucent dark surfaces, rounded cards and a floating pill, with short fade-in animations.
+
 ### 1. The Whitelist Barrier & Custom URL Support
 - **Default Allowed Sites:**
   - **NotebookLM** (`notebooklm.google.com`)
@@ -28,9 +30,10 @@ Navigate to the `focusguard` folder:
   - Type or paste any website or URL in the setup field (e.g. `discord.com`, `https://discord.com`, `leetcode.com`, `claude.ai`, `chatgpt.com`).
   - **Smart Expansion:** Typing `discord.com` automatically extracts and whitelists both the domain (`discord.com`) and the keyword (`discord`), covering both the browser tab and the desktop app (`Discord.exe`).
   - **Priority Override:** Explicitly whitelisted sites override the default blacklist!
+  - **Google Meet:** Enter `gmeet.com`, `meet.google.com`, or a full meeting link to allow Google Meet for the session.
   - **Remembered Across Restarts:** Saved in `config.json` so your custom sites stay saved.
 - **Forbidden Sites & Apps:**
-  - YouTube, Reddit, Instagram, Twitter/X, TikTok, Twitch, Netflix, Steam, games, or any unauthorized site (unless you whitelist them).
+  - Unlisted websites and desktop apps flagged as distractions (such as Discord or Steam) trigger the alarm unless you whitelist them. Windows utilities and other desktop apps are allowed by default.
   - **Action on Violation:**
     1. Cranks Windows master volume up to **100%**.
     2. Blasts a piercing alternating dual-tone siren (`2800 Hz` & `1800 Hz`).
@@ -58,7 +61,7 @@ Navigate to the `focusguard` folder:
 
 ### 4. Episode-Based Distraction Tracking & Instant Audio Trigger
 - **Accurate Counting:** Counts distraction **episodes/events** rather than loop clock ticks. Switching to YouTube and staying there for 20 seconds counts as **1 distraction**, not 40.
-- **Instant Audio On/Off:** Polling runs at 100ms and audio operates on micro 80ms slices. The alarm fires immediately when leaving allowed tabs and cuts off immediately when returning.
+- **Focus tracking:** The app polls the foreground window every 100 ms and reads browser addresses in the background. While checking a new browser tab, it pauses distraction alarms until it can classify the tab.
 
 ### 4. Floating On-Screen HUD Overlay
 - A sleek, draggable floating HUD stays anchored on top of your screen:

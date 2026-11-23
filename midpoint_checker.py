@@ -1,12 +1,12 @@
 import tkinter as tk
-import time
+from appearance import style_dialog
 
 class MidpointCheckerDialog:
     """
     Small, compact on-screen checker that pops up randomly at (Session Duration / 2) ± 10 seconds.
     Forces a quick active verification that the user is still on task.
     """
-    def __init__(self, parent, session_minutes, timeout_seconds, alarm_manager, on_confirmed):
+    def __init__(self, parent, session_minutes, timeout_seconds, alarm_manager, on_confirmed, *, apple=False):
         self.parent = parent
         self.session_minutes = session_minutes
         self.timeout_seconds = timeout_seconds
@@ -18,6 +18,7 @@ class MidpointCheckerDialog:
         self._timer_id = None
 
         self.dialog = tk.Toplevel(parent)
+        self.dialog.withdraw()
         self.dialog.title("Focuzzer - Midpoint Focus Check")
         self.dialog.attributes("-topmost", True)
         self.dialog.configure(bg="#0A0F1E")
@@ -34,8 +35,11 @@ class MidpointCheckerDialog:
         self.dialog.protocol("WM_DELETE_WINDOW", self._on_attempt_close)
 
         self._build_ui()
+        style_dialog(self.dialog, apple)
+        self.dialog.deiconify()
+        self.btn_confirm.focus_set()
         self.alarm_manager.play_warning_blip()
-        self._tick()
+        self._timer_id = self.dialog.after(1000, self._tick)
 
     def _build_ui(self):
         # Outer card frame with indigo border
@@ -110,8 +114,8 @@ class MidpointCheckerDialog:
         if self.confirmed or not self.dialog.winfo_exists():
             return
 
+        self.remaining_seconds -= 1
         if self.remaining_seconds > 0:
-            self.remaining_seconds -= 1
             self.lbl_countdown.config(
                 text=f"{self.remaining_seconds}s",
                 fg="#EF4444" if self.remaining_seconds <= 8 else "#F59E0B"
@@ -123,10 +127,8 @@ class MidpointCheckerDialog:
             # Timed out — just show ALARM label; the main tick loop
             # (focus_guard._tick) sees midpoint_timed_out=True and starts alarm.
             # Do NOT call start_alarm() here to avoid double-alarm overlap.
-            self.lbl_countdown.config(text="ALARM!", fg="#EF4444")
-            self.dialog.lift()
-            self.dialog.attributes("-topmost", True)
-            self._timer_id = self.dialog.after(1000, self._tick)
+            self.lbl_countdown.config(text="CHECK-IN OVERDUE", fg="#EF4444")
+            self._timer_id = None
 
     def _confirm(self):
         if self.confirmed:

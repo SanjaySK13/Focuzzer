@@ -16,6 +16,7 @@ from window_tracker import WindowTracker
 from overlay_hud import OverlayHUD
 from hourly_checkin import HourlyCheckinDialog
 from midpoint_checker import MidpointCheckerDialog
+from appearance import apple_color, glass_prompt, style_widgets, style_window, surface
 
 # ─── Colour palette (matches HUD) ────────────────────────────────────────────
 BG       = "#0A0F1E"
@@ -41,8 +42,10 @@ def _btn(parent, text, cmd, color=ACCENT, fg="#FFFFFF", **kwargs):
         cursor="hand2",
         **kwargs
     )
-    b.bind("<Enter>", lambda e: b.config(bg=_darken(color)))
-    b.bind("<Leave>", lambda e: b.config(bg=color))
+    b.bind("<Enter>", lambda e: b.config(bg=_darken(
+        apple_color(color) if getattr(b, "_apple_style", False) else color)))
+    b.bind("<Leave>", lambda e: b.config(
+        bg=apple_color(color) if getattr(b, "_apple_style", False) else color))
     return b
 
 def _darken(hex_col):
@@ -58,6 +61,7 @@ def _darken(hex_col):
 class FocusGuardApp:
     def __init__(self, root):
         self.root = root
+        self.root.withdraw()
         self.root.title("Focuzzer - Hardcore Study Lock")
         self.root.configure(bg=BG)
 
@@ -98,7 +102,10 @@ class FocusGuardApp:
         self.midpoint_triggered   = False
         self.active_midpoint      = None
 
+        self._appearance_labels = []
         self._build_ui()
+        self._apply_appearance(animate=True)
+        self.root.deiconify()
         self.root.protocol("WM_DELETE_WINDOW", self._on_exit)
 
     # =========================================================================
@@ -106,18 +113,29 @@ class FocusGuardApp:
     # =========================================================================
     def _build_ui(self):
         # ── Top accent stripe & title bar ─────────────────────────────────────
-        hdr = tk.Frame(self.root, bg=ACCENT, height=3)
-        hdr.pack(fill="x")
+        self.header_stripe = tk.Frame(self.root, bg=ACCENT, height=3)
+        self.header_stripe.pack(fill="x")
 
         title_bar = tk.Frame(self.root, bg=BG, padx=20, pady=10)
         title_bar.pack(fill="x")
 
-        tk.Label(title_bar, text="🛡  Focuzzer",
-                 font=("Segoe UI", 16, "bold"),
-                 bg=BG, fg=TEXT_HI).pack(side="left")
+        brand = tk.Label(title_bar, text="🛡  Focuzzer", font=("Segoe UI", 16, "bold"),
+                         bg=BG, fg=TEXT_HI)
+        brand.pack(side="left")
 
-        tk.Label(title_bar, text="Hardcore Study Sentinel",
-                 font=("Segoe UI", 9), bg=BG, fg=TEXT_MID).pack(side="left", padx=10, pady=2)
+        subtitle = tk.Label(title_bar, text="Hardcore Study Sentinel",
+                            font=("Segoe UI", 9), bg=BG, fg=TEXT_MID)
+        subtitle.pack(side="left", padx=10, pady=2)
+        self._appearance_labels.append((subtitle, "Hardcore Study Sentinel", "Study sessions"))
+
+        self.style_choice = ttk.Combobox(
+            title_bar, values=("Basic", "Apple"), state="readonly",
+            width=7, style="Appearance.TCombobox"
+        )
+        self.style_choice.set("Apple" if self.apple_style else "Basic")
+        self.style_choice.pack(side="right")
+        self.style_choice.bind("<<ComboboxSelected>>", self._change_appearance)
+        tk.Label(title_bar, text="Style", bg=BG, fg=TEXT_MID).pack(side="right", padx=8)
 
         # ── Tab bar ───────────────────────────────────────────────────────────
         self.notebook = ttk.Notebook(self.root)
@@ -135,16 +153,56 @@ class FocusGuardApp:
         self._build_session_tab()
         self._build_history_tab()
 
+    @property
+    def apple_style(self):
+        return self.config.get("appearance") == "apple"
+
+    def _change_appearance(self, _event=None):
+        self.config["appearance"] = self.style_choice.get().lower()
+        save_config(self.config)
+        self._apply_appearance(animate=True)
+
+    def _message(self, kind, title, message, *, parent):
+        if self.apple_style:
+            return glass_prompt(parent, kind, title, message)
+        return getattr(messagebox, kind)(title, message, parent=parent)
+
+    def _apply_appearance(self, animate=False):
+        style_widgets(self.root, self.apple_style)
+        self.header_stripe.configure(bg=apple_color(BG) if self.apple_style else ACCENT)
+        for widget, basic, apple in self._appearance_labels:
+            widget.configure(text=apple if self.apple_style else basic)
+        self.notebook.tab(self.tab_session, text="New session" if self.apple_style else "  ▶  New Session  ")
+        self.notebook.tab(self.tab_history, text="History" if self.apple_style else "  📊  Study History  ")
+        self._style_notebook()
+        color = apple_color if self.apple_style else str
+        style = ttk.Style()
+        style.configure("Appearance.TCombobox", foreground=TEXT_HI,
+                        arrowcolor=TEXT_HI, background=color(BG_CARD))
+        style.map("Appearance.TCombobox",
+                  fieldbackground=[("readonly", color(BG_ROW))],
+                  foreground=[("readonly", TEXT_HI)],
+                  selectbackground=[("readonly", color(BG_ROW))])
+        style.configure("FG.Treeview", background=color(BG_ROW),
+                        fieldbackground=color(BG_ROW), foreground=TEXT_HI)
+        style.configure("FG.Treeview.Heading", background=color(BG_CARD),
+                        foreground=color(TEXT_MID))
+        style.map("FG.Treeview", background=[("selected", color(ACCENT))])
+        self.tree.tag_configure("even", background=color(BG_ROW))
+        self.tree.tag_configure("odd", background=color(BG_ROW2))
+        style_window(self.root, self.apple_style, animate=animate)
+
     def _style_notebook(self):
         style = ttk.Style()
         style.theme_use("clam")
-        style.configure("TNotebook", background=BG, borderwidth=0)
+        color = apple_color if self.apple_style else str
+        style.configure("TNotebook", background=color(BG), borderwidth=0)
         style.configure("TNotebook.Tab",
-                        background=BG_CARD, foreground=TEXT_MID,
+                        background=color(BG_CARD), foreground=color(TEXT_MID),
                         font=("Segoe UI", 9, "bold"),
                         padding=[14, 6])
         style.map("TNotebook.Tab",
-                  background=[("selected", ACCENT)],
+                  background=[("selected", color(ACCENT))],
                   foreground=[("selected", TEXT_HI)])
 
     # ─── Session tab ──────────────────────────────────────────────────────────
@@ -170,8 +228,11 @@ class FocusGuardApp:
             command=self._start_session
         )
         self.btn_launch.pack(fill="x")
-        self.btn_launch.bind("<Enter>", lambda e: self.btn_launch.config(bg="#4F46E5"))
-        self.btn_launch.bind("<Leave>", lambda e: self.btn_launch.config(bg=ACCENT))
+        self._appearance_labels.append((self.btn_launch, self.btn_launch["text"], "Start focus session"))
+        self.btn_launch.bind("<Enter>", lambda e: self.btn_launch.config(
+            bg=apple_color("#4F46E5") if self.apple_style else "#4F46E5"))
+        self.btn_launch.bind("<Leave>", lambda e: self.btn_launch.config(
+            bg=apple_color(ACCENT) if self.apple_style else ACCENT))
 
         # ── Top Content Frame (fits cleanly above the button) ────────────────
         content = tk.Frame(s, bg=BG, padx=20, pady=4)
@@ -180,10 +241,9 @@ class FocusGuardApp:
         pad = dict(fill="x", pady=(0, 8))
 
         # ── Card 1: Duration ──────────────────────────────────────────────────
-        self._card_header(content, "1  —  Choose Study Commitment Duration")
+        self._card_header(content, "1  —  Choose Study Commitment Duration", "Duration")
 
-        dur_card = tk.Frame(content, bg=BG_CARD, padx=16, pady=10)
-        dur_card.pack(**pad)
+        dur_card = surface(content, BG, BG_CARD, **pad)
 
         tk.Label(dur_card,
                  text="🔒  Switch-off button stays LOCKED until this timer runs out.",
@@ -224,10 +284,9 @@ class FocusGuardApp:
         self.entry_custom.pack(side="left", padx=8)
 
         # ── Card 2: Allowed Whitelist ─────────────────────────────────────────
-        self._card_header(content, "2  —  Whitelisted Sites & Custom URLs")
+        self._card_header(content, "2  —  Whitelisted Sites & Custom URLs", "Allowed sites and apps")
 
-        wl_card = tk.Frame(content, bg=BG_CARD, padx=16, pady=8)
-        wl_card.pack(**pad)
+        wl_card = surface(content, BG, BG_CARD, **pad)
 
         sites_grid = tk.Frame(wl_card, bg=BG_CARD)
         sites_grid.pack(fill="x")
@@ -266,10 +325,9 @@ class FocusGuardApp:
             self.entry_extra.insert(0, saved_urls)
 
         # ── Card 3: Enforcement Options ───────────────────────────────────────
-        self._card_header(content, "3  —  Addiction Breaker Settings")
+        self._card_header(content, "3  —  Addiction Breaker Settings", "Alerts and check-ins")
 
-        opt_card = tk.Frame(content, bg=BG_CARD, padx=16, pady=8)
-        opt_card.pack(**pad)
+        opt_card = surface(content, BG, BG_CARD, **pad)
 
         self.var_vol    = tk.BooleanVar(value=self.config.get("blast_max_volume", True))
         self.var_hourly = tk.BooleanVar(value=True)
@@ -286,18 +344,19 @@ class FocusGuardApp:
                 activebackground=BG_CARD, activeforeground=col
             ).pack(anchor="w", pady=1)
 
-    def _card_header(self, parent, text):
-        tk.Label(parent, text=text,
-                 font=("Segoe UI", 8, "bold"),
-                 bg=BG, fg=TEXT_DIM).pack(anchor="w", pady=(6, 2))
+    def _card_header(self, parent, text, apple_text=None):
+        heading = tk.Label(parent, text=text,
+                           font=("Segoe UI", 9, "bold"), bg=BG, fg=TEXT_MID)
+        heading.pack(anchor="w", pady=(6, 2))
+        if apple_text:
+            self._appearance_labels.append((heading, text, apple_text))
 
     # ─── History tab ──────────────────────────────────────────────────────────
     def _build_history_tab(self):
         h = self.tab_history
 
         # ── Summary strip ─────────────────────────────────────────────────────
-        self.summary_frame = tk.Frame(h, bg=BG_CARD, padx=16, pady=10)
-        self.summary_frame.pack(fill="x", padx=20, pady=(12, 6))
+        self.summary_frame = surface(h, BG, BG_CARD, fill="x", padx=20, pady=(12, 6))
 
         # ── Table header ──────────────────────────────────────────────────────
         self._card_header(h, "Recent Study Sessions")
@@ -378,6 +437,8 @@ class FocusGuardApp:
                      bg=BG_ROW, fg=col).pack()
             tk.Label(box, text=label, font=("Segoe UI", 8),
                      bg=BG_ROW, fg=TEXT_MID).pack()
+            if self.apple_style:
+                style_widgets(box, True)
 
         for i, s in enumerate(reversed(real)):
             target_m   = s.get("target_duration_mins", 0)
@@ -397,7 +458,7 @@ class FocusGuardApp:
                              tags=(tag_row, tag_done))
 
     def _clear_history(self):
-        if messagebox.askyesno("Clear History",
+        if self._message("askyesno", "Clear History",
                                "Delete all study history records permanently?",
                                parent=self.root):
             try:
@@ -428,22 +489,14 @@ class FocusGuardApp:
                     raise ValueError
                 self.target_seconds = mins * 60
             except ValueError:
-                messagebox.showerror("Invalid Duration",
+                self._message("showerror", "Invalid Duration",
                                      "Enter a positive number between 1 and 1440 minutes.",
                                      parent=self.root)
                 return
         else:
             self.target_seconds = self.duration_var.get() * 60
 
-        # CRITICAL: Apply and expand all custom whitelisted URLs/keywords (e.g. discord.com)
         raw_extra = self.entry_extra.get().strip()
-        expanded_kws = apply_custom_whitelisted_urls(self.config, raw_extra)
-
-        self.config["blast_max_volume"] = self.var_vol.get()
-        save_config(self.config)
-
-        # Refresh tracker's config so new whitelisted keywords are live
-        self.window_tracker.config = self.config
 
         # Confirm lock commitment
         h_str = f"{self.target_seconds // 3600}h {(self.target_seconds % 3600) // 60}m"
@@ -451,11 +504,11 @@ class FocusGuardApp:
         if raw_extra:
             wl_summary += f", {raw_extra}"
 
-        if not messagebox.askyesno(
+        if not self._message("askyesno",
                 "Lock In?",
                 f"You are locking your computer into Study Mode for {h_str}.\n\n"
                 f"• Whitelisted: {wl_summary}\n"
-                "• Other sites: Piercing alarm blasts (BEEEEEP BEEEEEEP)\n"
+                "• Unlisted websites and flagged desktop apps trigger the alarm\n"
                 "• Switch-off button is LOCKED until time expires\n"
                 "• Early quit requires typing a 26-character jumbled code\n\n"
                 "Ready to commit?",
@@ -463,6 +516,10 @@ class FocusGuardApp:
             return
 
         # Launch
+        self.config["blast_max_volume"] = self.var_vol.get()
+        self.window_tracker.config = apply_custom_whitelisted_urls(self.config, raw_extra)
+        self.window_tracker.reset_session()
+        save_config(self.config)
         self.root.withdraw()
         self.session_active       = True
         self.start_timestamp      = time.time()
@@ -477,6 +534,7 @@ class FocusGuardApp:
         self.midpoint_target_sec = max(5.0, min(self.target_seconds - 5.0, half_sec + jitter))
         self.midpoint_triggered  = False
         self.active_midpoint     = None
+        self.active_checkin      = None
 
         hud_win  = tk.Toplevel(self.root)
         self.hud = OverlayHUD(hud_win, self.target_seconds,
@@ -495,7 +553,9 @@ class FocusGuardApp:
             self.hud.update_timers()
 
         # ── 1. Midpoint Focus Checker: (Halfway ± 10s) ───────────────────────
-        if self.var_hourly.get() and not self.midpoint_triggered and elapsed >= self.midpoint_target_sec:
+        can_prompt = (self.var_hourly.get() and elapsed < self.target_seconds
+                      and self.active_checkin is None and self.active_midpoint is None)
+        if can_prompt and not self.midpoint_triggered and elapsed >= self.midpoint_target_sec:
             self.midpoint_triggered = True
             if self.hud and self.hud.root.winfo_exists():
                 self.active_midpoint = MidpointCheckerDialog(
@@ -503,11 +563,12 @@ class FocusGuardApp:
                     self.target_seconds // 60,
                     25,  # 25 seconds to confirm before alarm sounds
                     self.alarm_manager,
-                    self._midpoint_done
+                    self._midpoint_done,
+                    apple=self.apple_style,
                 )
 
         # ── 2. Hourly Check-in Trigger (Every 3600s) ─────────────────────────
-        if self.var_hourly.get() and (now - self.last_checkin_ts >= 3600):
+        elif can_prompt and (now - self.last_checkin_ts >= 3600):
             if self.active_checkin is None:
                 self.checkin_count += 1
                 if self.hud and self.hud.root.winfo_exists():
@@ -516,7 +577,8 @@ class FocusGuardApp:
                         self.checkin_count,
                         int(self.config.get("hourly_checkin_timeout_seconds", 60)),
                         self.alarm_manager,
-                        self._checkin_done
+                        self._checkin_done,
+                        apple=self.apple_style,
                     )
 
         # ── 3. Ultra-Low-Latency Continuous Focus Window Evaluation ──────────
@@ -537,23 +599,18 @@ class FocusGuardApp:
                 self._in_violation_state = True
                 self.distraction_count += 1
 
-            # Only start tab-violation alarm if no modal alarm is already sounding
-            if not self.alarm_manager.is_alarming() and not modal_alarm_active:
-                self.alarm_manager.start_alarm()
+        elif ev["status"] not in ("neutral", "checking"):
+            self._in_violation_state = False
 
-        else:
-            # Bug fix: clicking the Focuzzer pill makes it the foreground window (allowed)
-            # while still on a restricted site — don't stop alarm or reset violation state.
-            is_focuzzer_focus = ev.get("matched_item", "") in ("Focuzzer", "System")
-            if is_focuzzer_focus and self._in_violation_state:
-                pass  # keep alarm running, don't reset state
-            else:
-                self._in_violation_state = False
-                # Silence tab-violation alarm; leave modal alarms alone
-                if not modal_alarm_active and self.alarm_manager.is_alarming():
-                    self.alarm_manager.stop_alarm()
+        should_alarm = modal_alarm_active or (
+            self._in_violation_state and ev["status"] != "checking"
+        )
+        if should_alarm and not self.alarm_manager.is_alarming():
+            self.alarm_manager.start_alarm()
+        elif not should_alarm and self.alarm_manager.is_alarming():
+            self.alarm_manager.stop_alarm()
 
-        # Fast 100ms polling for INSTANT (<0.1s) tab switch detection
+        # Poll focus independently of the background browser address reader.
         self._mon_id = self.root.after(100, self._tick)
 
     def _midpoint_done(self):
@@ -593,6 +650,7 @@ class FocusGuardApp:
         }
         append_study_history(record)
 
+        style_window(self.root, self.apple_style, animate=True)
         self.root.deiconify()
         # Switch to history tab so user sees their record
         self.notebook.select(1)
@@ -600,7 +658,7 @@ class FocusGuardApp:
 
         if normal_exit:
             self.alarm_manager.play_success_chime()
-            messagebox.showinfo(
+            self._message("showinfo",
                 "Session Complete 🎉",
                 f"You achieved your study goal!\n\n"
                 f"⏱  Total Study Time  :  {mins}m {s}s\n"
@@ -609,7 +667,7 @@ class FocusGuardApp:
                 "Saved to Study History.",
                 parent=self.root)
         else:
-            messagebox.showwarning(
+            self._message("showwarning",
                 "Session Overridden",
                 f"Study session ended early via jumbled challenge.\n\n"
                 f"⏱  Time Studied  :  {mins}m {s}s\n"
@@ -618,6 +676,7 @@ class FocusGuardApp:
 
     def _on_exit(self):
         self.session_active = False
+        self.window_tracker.close()
         self.alarm_manager.shutdown()
         self.root.destroy()
 

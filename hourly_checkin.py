@@ -1,9 +1,10 @@
 import tkinter as tk
+from appearance import style_dialog
 from tkinter import ttk
 import time
 
 class HourlyCheckinDialog:
-    def __init__(self, parent, hour_num, timeout_seconds, alarm_manager, on_confirmed):
+    def __init__(self, parent, hour_num, timeout_seconds, alarm_manager, on_confirmed, *, apple=False):
         self.parent = parent
         self.hour_num = hour_num
         self.timeout_seconds = timeout_seconds
@@ -15,6 +16,7 @@ class HourlyCheckinDialog:
         
         # Create TopLevel window
         self.dialog = tk.Toplevel(parent)
+        self.dialog.withdraw()
         self.dialog.title("Focuzzer - Hourly Check-in")
         self.dialog.attributes("-topmost", True)
         self.dialog.configure(bg="#0F172A")
@@ -32,12 +34,15 @@ class HourlyCheckinDialog:
         self.dialog.protocol("WM_DELETE_WINDOW", self._on_attempt_close)
         
         self._build_ui()
+        style_dialog(self.dialog, apple)
+        self.dialog.deiconify()
+        self.btn_confirm.focus_set()
         
         # Play alert blip
         self.alarm_manager.play_warning_blip()
         
         # Start countdown ticker
-        self._tick()
+        self._timer_id = self.dialog.after(1000, self._tick)
 
     def _build_ui(self):
         main_frame = tk.Frame(self.dialog, bg="#0F172A", padx=24, pady=20)
@@ -102,8 +107,8 @@ class HourlyCheckinDialog:
         if self.confirmed or not self.dialog.winfo_exists():
             return
 
+        self.remaining_seconds -= 1
         if self.remaining_seconds > 0:
-            self.remaining_seconds -= 1
             self.lbl_countdown.config(
                 text=f"Confirm within {self.remaining_seconds}s or ALARM will blast!",
                 fg="#EF4444" if self.remaining_seconds <= 15 else "#F59E0B"
@@ -119,9 +124,7 @@ class HourlyCheckinDialog:
                 text="🚨 TIME EXPIRED! CLICK BELOW TO CONFIRM & STOP ALARM!",
                 fg="#EF4444"
             )
-            self.dialog.lift()
-            self.dialog.attributes("-topmost", True)
-            self._timer_id = self.dialog.after(1000, self._tick)
+            self._timer_id = None
 
     def _confirm(self):
         if self.confirmed:

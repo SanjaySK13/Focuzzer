@@ -1,6 +1,7 @@
 import tkinter as tk
 import random
 import string
+from appearance import style_dialog
 
 # Unambiguous characters (excludes easily confused: 0, O, o, 1, l, I)
 CHALLENGE_CHARS = "23456789abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ!@#$%&*?="
@@ -25,18 +26,21 @@ def generate_jumbled_string(length=26):
     return "".join(combined)
 
 class EmergencyUnlockDialog:
-    def __init__(self, parent, on_unlock_granted):
+    def __init__(self, parent, on_unlock_granted, *, apple=False):
         self.parent = parent
         self.on_unlock_granted = on_unlock_granted
         self.target_phrase = generate_jumbled_string(26)
         
         self.dialog = tk.Toplevel(parent)
+        self.dialog.withdraw()
         self.dialog.title("Focuzzer - Quit Verification Challenge")
         self.dialog.attributes("-topmost", True)
         self.dialog.configure(bg="#0B0F19")
         
-        # Dimensions & Centering
-        w, h = 580, 420
+        self._build_ui()
+        self.dialog.update_idletasks()
+        # Size from the actual font metrics and button heights at this DPI.
+        w, h = self.dialog.winfo_reqwidth(), self.dialog.winfo_reqheight()
         screen_w = self.dialog.winfo_screenwidth()
         screen_h = self.dialog.winfo_screenheight()
         x = (screen_w - w) // 2
@@ -44,7 +48,9 @@ class EmergencyUnlockDialog:
         self.dialog.geometry(f"{w}x{h}+{x}+{y}")
         self.dialog.resizable(False, False)
 
-        self._build_ui()
+        style_dialog(self.dialog, apple)
+        self.dialog.deiconify()
+        self.entry.focus_set()
 
     def _build_ui(self):
         frame = tk.Frame(self.dialog, bg="#0B0F19", padx=24, pady=20)
@@ -87,8 +93,9 @@ class EmergencyUnlockDialog:
 
         lbl_desc = tk.Label(
             frame,
-            text="To prevent impulse quitting, you must manually type out every single character\nof the randomized jumbled line below. Typing forces your brain to pause and refocus.",
-            font=("Segoe UI", 9),
+            text="To end the session early, type the code exactly as shown. Capital letters matter.",
+            font=("Segoe UI", 10),
+            wraplength="340p",
             bg="#0B0F19",
             fg="#94A3B8",
             justify="left"
@@ -97,7 +104,7 @@ class EmergencyUnlockDialog:
 
         # Jumbled string display box
         target_container = tk.Frame(frame, bg="#1E1B4B", bd=2, relief="solid")
-        target_container.pack(fill="x", pady=(0, 8))
+        target_container.pack(fill="x", pady=(4, 14))
 
         code_header = tk.Frame(target_container, bg="#1E1B4B", padx=10, pady=4)
         code_header.pack(fill="x")
@@ -146,7 +153,7 @@ class EmergencyUnlockDialog:
             bg="#0B0F19",
             fg="#E2E8F0"
         )
-        lbl_type_prompt.pack(anchor="w", pady=(4, 2))
+        lbl_type_prompt.pack(anchor="w", pady=(0, 5))
 
         self.entry_var = tk.StringVar()
         self.entry_var.trace_add("write", self._on_text_change)
@@ -165,7 +172,6 @@ class EmergencyUnlockDialog:
             highlightcolor="#6366F1"
         )
         self.entry.pack(fill="x", ipady=6, pady=(0, 6))
-        self.entry.focus_set()
 
         # BLOCK ALL PASTE SHORTCUTS AND RIGHT-CLICK
         self.entry.bind("<Control-v>", lambda e: "break")
@@ -176,7 +182,7 @@ class EmergencyUnlockDialog:
 
         # Status & character counter
         status_row = tk.Frame(frame, bg="#0B0F19")
-        status_row.pack(fill="x", pady=(0, 14))
+        status_row.pack(fill="x", pady=(2, 20))
 
         self.lbl_status = tk.Label(
             status_row,
@@ -266,7 +272,7 @@ class EmergencyUnlockDialog:
             self._set_quit_enabled(False)
         else:
             # Mistake!
-            self.lbl_status.config(text="⚠️ Mismatch! Backspace and check character carefully.", fg="#EF4444")
+            self.lbl_status.config(text="Mismatch. Backspace to correct it.", fg="#EF4444")
             self.lbl_counter.config(fg="#EF4444")
             self.entry.config(highlightbackground="#EF4444", highlightcolor="#EF4444")
             self._set_quit_enabled(False)

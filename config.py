@@ -1,8 +1,11 @@
+from copy import deepcopy
 import json
 import os
 import re
 
 DEFAULT_CONFIG = {
+    "appearance": "basic",
+    "session_allowlist_version": 1,
     # Core sites allowed (user's explicit focus domains)
     "allowed_site_keywords": [
         "notebooklm",
@@ -34,6 +37,14 @@ DEFAULT_CONFIG = {
     "system_whitelisted_processes": [
         "explorer.exe",
         "shellexperiencehost.exe",
+        "shellhost.exe",
+        "systemsettingsbroker.exe",
+        "windowsterminal.exe",
+        "openconsole.exe",
+        "conhost.exe",
+        "cmd.exe",
+        "powershell.exe",
+        "pwsh.exe",
         "startmenuexperiencehost.exe",
         "searchhost.exe",
         "searchapp.exe",
@@ -107,6 +118,9 @@ DEFAULT_CONFIG = {
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "study_history.json")
 
+GOOGLE_MEET_HOST = "meet.google.com"
+GOOGLE_MEET_HOSTS = {GOOGLE_MEET_HOST, "gmeet.com"}
+
 def parse_and_expand_keywords(raw_text):
     """
     Parses user-entered URLs, domains, or keywords and extracts all matching variants.
@@ -138,52 +152,51 @@ def parse_and_expand_keywords(raw_text):
             if host_no_port.startswith('www.'):
                 host_no_port = host_no_port[4:]
                 expanded.add(host_no_port)
+
+            if host_no_port.rstrip(".") in GOOGLE_MEET_HOSTS:
+                expanded.add(GOOGLE_MEET_HOST)
+                continue
                 
             # Split domain parts
             parts = host_no_port.split('.')
             common_tlds = {'com', 'org', 'net', 'edu', 'gov', 'io', 'ai', 'app', 'dev', 'co', 'in', 'uk', 'ca', 'de', 'me', 'xyz', 'cc'}
-            for part in parts:
-                if len(part) >= 3 and part not in common_tlds:
-                    expanded.add(part)
+            while len(parts) > 1 and parts[-1] in common_tlds:
+                parts.pop()
+            if len(parts[-1]) >= 3:
+                expanded.add(parts[-1])
                     
     return sorted(list(expanded))
 
 def apply_custom_whitelisted_urls(config, raw_text):
-    """
-    Applies user-entered URLs to config:
-    1. Expands URLs into domain/keyword variants.
-    2. Adds them to allowed_site_keywords.
-    3. CRITICAL: Removes any matching keywords from instant_alarm_keywords so whitelist overrides blacklist!
-    4. Saves raw_text to custom_extra_input so it's remembered.
-    """
-    expanded_keywords = parse_and_expand_keywords(raw_text)
-    
-    for kw in expanded_keywords:
-        if kw not in config["allowed_site_keywords"]:
-            config["allowed_site_keywords"].append(kw)
-            
-        # Un-blacklist! Whitelist MUST override blacklist!
-        if "instant_alarm_keywords" in config:
-            config["instant_alarm_keywords"] = [
-                b for b in config["instant_alarm_keywords"]
-                if b.lower() != kw and b.lower() not in kw and kw not in b.lower()
-            ]
-            
+    """Remember the setup input and build the allowlist for this session."""
     config["custom_extra_input"] = raw_text.strip()
-    save_config(config)
-    return expanded_keywords
+    return {
+        **config,
+        "allowed_site_keywords": list(dict.fromkeys([
+            *config["allowed_site_keywords"], *parse_and_expand_keywords(raw_text)
+        ])),
+    }
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                config = DEFAULT_CONFIG.copy()
+                config = deepcopy(DEFAULT_CONFIG)
                 config.update(data)
+                config["system_whitelisted_processes"] = list(dict.fromkeys([
+                    *DEFAULT_CONFIG["system_whitelisted_processes"],
+                    *config["system_whitelisted_processes"],
+                ]))
+                if not data.get("session_allowlist_version"):
+                    # Older saves mixed past session entries into these two lists.
+                    config["allowed_site_keywords"] = list(DEFAULT_CONFIG["allowed_site_keywords"])
+                    config["instant_alarm_keywords"] = list(DEFAULT_CONFIG["instant_alarm_keywords"])
+                config["session_allowlist_version"] = 1
                 return config
         except Exception:
             pass
-    return DEFAULT_CONFIG.copy()
+    return deepcopy(DEFAULT_CONFIG)
 
 def save_config(config):
     try:
