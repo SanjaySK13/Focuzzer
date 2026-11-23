@@ -2,6 +2,7 @@ from copy import deepcopy
 import json
 import os
 import re
+import sys
 
 DEFAULT_CONFIG = {
     "appearance": "basic",
@@ -115,8 +116,11 @@ DEFAULT_CONFIG = {
     "custom_extra_input": ""
 }
 
-CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
-HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "study_history.json")
+# A one-file build extracts Python modules to a temporary directory on every run.
+# Keep the portable app's data alongside the executable so it survives restarts.
+DATA_DIR = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
+CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
+HISTORY_FILE = os.path.join(DATA_DIR, "study_history.json")
 
 GOOGLE_MEET_HOST = "meet.google.com"
 GOOGLE_MEET_HOSTS = {GOOGLE_MEET_HOST, "gmeet.com"}
