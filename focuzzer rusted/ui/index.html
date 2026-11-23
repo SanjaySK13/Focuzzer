@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Focuzzer</title>
+  <link rel="stylesheet" href="style.css">
+  <script defer src="app.js"></script>
+</head>
+<body>
+<main id="dashboard" hidden>
+  <header class="masthead">
+    <a class="brand" href="index.html" aria-label="Focuzzer home"><span class="brand-mark" aria-hidden="true">✦</span> Focuzzer</a>
+    <button id="sound" class="quiet-button" type="button" aria-pressed="true">Sound on</button>
+  </header>
+  <div class="intro"><h1>Make time for focus.</h1><p>Set a goal, start a timer, and settle into your work.</p></div>
+  <div class="layout">
+    <form id="session-form" class="surface setup">
+      <h2>New session</h2>
+      <label for="goal">Study goal</label>
+      <input id="goal" name="goal" maxlength="100" placeholder="What are you working on?">
+      <label for="minutes">Duration</label>
+      <div class="duration">
+        <div class="segmented" id="presets" aria-label="Duration presets">
+          <button type="button" data-minutes="25">25 min</button>
+          <button type="button" data-minutes="45">45 min</button>
+          <button type="button" data-minutes="60">60 min</button>
+        </div>
+        <div class="minute-field"><input id="minutes" name="minutes" type="number" min="1" max="180" value="25" required><span>min</span></div>
+      </div>
+      <label for="sites">Extra allowed websites</label>
+      <input id="sites" name="sites" maxlength="2000" placeholder="meet.google.com, example.edu" aria-describedby="site-defaults">
+      <p id="site-defaults" class="field-note">ChatGPT, Gemini, NotebookLM, and WhatsApp are included.</p>
+      <button class="primary" type="submit" id="start"><span>Start challenge</span><span aria-hidden="true">↗</span></button>
+      <p id="dashboard-status" role="status" hidden></p>
+    </form>
+    <div class="right-stack">
+      <section class="surface preview">
+        <div><h2>Floating pill</h2><p>Hover to see session details.</p></div>
+        <div class="preview-stage" aria-hidden="true"><div id="sample" class="sample">
+          <span class="orb">✦</span><span class="sample-digits">25:00</span>
+        </div></div>
+        <div class="segmented" id="styles" aria-label="Pill style">
+          <button type="button" data-style="digits">Countdown</button>
+          <button type="button" data-style="fill">Color fill</button>
+        </div>
+      </section>
+      <section class="surface history"><h2>Recent sessions</h2><ul id="history"></ul></section>
+    </div>
+  </div>
+</main>
+
+<section id="floating" class="floating" aria-label="Floating focus timer" hidden>
+  <div id="fill" aria-hidden="true"></div>
+  <button id="pill-top" class="pill-top" type="button" aria-expanded="false" aria-controls="pill-detail" title="Session details. Drag to move.">
+    <span class="orb" aria-hidden="true">✦</span>
+    <span class="pill-readout"><span id="pill-value"></span><span id="pill-tab" hidden></span></span>
+  </button>
+  <div id="pill-detail" class="pill-detail" inert>
+    <strong id="pill-goal"></strong>
+    <div class="pill-meta"><span id="pill-remaining"></span><button id="finish" type="button">End session</button></div>
+    <p id="pill-distractions"></p>
+    <p id="pill-status" role="status" hidden></p>
+  </div>
+</section>
+<dialog id="quit-dialog" aria-labelledby="quit-title">
+  <form id="quit-form">
+    <h1 id="quit-title">End this session?</h1>
+    <p>Type the code exactly as shown to quit early.</p>
+    <code id="quit-code"></code>
+    <label for="quit-input">Quit code</label>
+    <input id="quit-input" type="password" autocomplete="off" spellcheck="false" maxlength="128" required>
+    <p id="quit-status" role="status" hidden></p>
+    <div class="quit-actions">
+      <button id="quit-cancel" type="button">Keep studying</button>
+      <button id="quit-confirm" type="submit">Quit session</button>
+    </div>
+  </form>
+</dialog>
+<section id="alarm-banner" class="alarm-banner" hidden aria-label="Distraction detected">
+  <div class="alarm-icon" aria-hidden="true">!</div>
+  <div><h1>Return to focus</h1><p id="blocked-site"></p><p>Open an allowed website to silence the alarm.</p></div>
+</section>
+<section id="reminder-card" class="reminder-card" hidden aria-labelledby="reminder-title">
+  <p class="reminder-label">Halfway check-in</p>
+  <h1 id="reminder-title">Are you studying?</h1>
+  <p id="reminder-status">Confirm within 10 seconds.</p>
+  <button id="confirm-studying" class="primary" type="button">I am studying</button>
+</section>
+</body>
+</html>
