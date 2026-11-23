@@ -68,6 +68,100 @@ fn domain_matches(host: &str, rule: &str) -> bool {
             .is_some_and(|prefix| prefix.ends_with('.'))
 }
 
+fn friendly_name(value: &str) -> String {
+    value
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+fn one_edit(left: &str, right: &str) -> bool {
+    let (shorter, longer) = if left.len() <= right.len() {
+        (left.as_bytes(), right.as_bytes())
+    } else {
+        (right.as_bytes(), left.as_bytes())
+    };
+    if longer.len() > shorter.len() + 1 {
+        return false;
+    }
+    let first = shorter
+        .iter()
+        .zip(longer)
+        .position(|(a, b)| a != b)
+        .unwrap_or(shorter.len());
+    first == shorter.len()
+        || if shorter.len() == longer.len() {
+            shorter[first + 1..] == longer[first + 1..]
+        } else {
+            shorter[first..] == longer[first + 1..]
+        }
+}
+
+fn service_domains(value: &str) -> Option<&'static [&'static str]> {
+    let lower = value.to_ascii_lowercase();
+    let domain = host(value);
+    let candidate = domain
+        .as_deref()
+        .unwrap_or(&lower)
+        .trim_start_matches("www.");
+    let key = friendly_name(candidate.strip_suffix(".com").unwrap_or(candidate));
+    [
+        ("gemini", &["gemini.google.com"][..]),
+        (
+            "notebooklm",
+            &["notebooklm.google.com", "notebooklm.google"][..],
+        ),
+        ("whatsapp", &["whatsapp.com"][..]),
+        ("chatgpt", &["chatgpt.com", "chat.openai.com"][..]),
+        ("gmeet", &["meet.google.com"][..]),
+        ("googlemeet", &["meet.google.com"][..]),
+    ]
+    .into_iter()
+    .find(|(name, _)| *name == key || (name.len() >= 6 && one_edit(name, &key)))
+    .map(|(_, hosts)| hosts)
+}
+
+pub fn website_rules(input: &str) -> Result<Vec<String>, String> {
+    let mut rules = Vec::new();
+    for entry in input
+        .split([',', '\n'])
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    {
+        if let Some(domains) = service_domains(entry) {
+            rules.extend(domains.iter().map(|domain| (*domain).to_owned()));
+        } else {
+            for value in entry.split_whitespace() {
+                if let Some(domains) = service_domains(value) {
+                    rules.extend(domains.iter().map(|domain| (*domain).to_owned()));
+                } else {
+                    let domain = host(value).ok_or_else(|| {
+                        format!("Try a website name or full domain for “{value}”.")
+                    })?;
+                    rules.push(domain.trim_start_matches("www.").to_owned());
+                }
+            }
+        }
+    }
+    rules.sort_unstable();
+    rules.dedup();
+    Ok(rules)
+}
+
+pub fn app_name(value: &str) -> String {
+    let value = value.to_ascii_lowercase();
+    let name = friendly_name(value.trim_end_matches(".exe"));
+    match name.as_str() {
+        "chatgptapp" | "openaichatgpt" => "chatgpt".into(),
+        "visualstudiocode" | "vscode" => "code".into(),
+        "word" | "microsoftword" => "winword".into(),
+        "microsoftexcel" => "excel".into(),
+        "powerpoint" | "microsoftpowerpoint" => "powerpnt".into(),
+        _ => name,
+    }
+}
+
 fn should_block(host: &str, run: &crate::Running) -> bool {
     run.blocked_rules
         .iter()
@@ -82,7 +176,7 @@ fn should_block(host: &str, run: &crate::Running) -> bool {
 
 enum Reading {
     OwnWindow,
-    Desktop,
+    Desktop { exe: String, title: Option<String> },
     Unknown(Option<String>),
     Site { host: String, title: Option<String> },
     NewTab,
@@ -178,7 +272,10 @@ fn foreground(automation: Option<&IUIAutomation>, cache: &mut AddressCache) -> R
                 | "arc.exe"
                 | "chromium.exe"
         ) {
-            return Reading::Desktop;
+            return Reading::Desktop {
+                exe: exe.trim_end_matches(".exe").to_owned(),
+                title: tab_title(hwnd),
+            };
         }
         let title = tab_title(hwnd);
         let result = automation.and_then(|uia| address(uia, hwnd, cache));
@@ -188,34 +285,141 @@ fn foreground(automation: Option<&IUIAutomation>, cache: &mut AddressCache) -> R
         let (value, editing) = result
             .as_ref()
             .map_or(("", false), |(value, editing)| (value.as_str(), *editing));
-        let new_tab = is_new_tab(value)
-            || title.as_deref().is_some_and(|title| {
-                matches!(
-                    title.to_ascii_lowercase().as_str(),
-                    "new tab" | "new tab page" | "start page" | "speed dial"
-                )
-            });
-        if editing && !(new_tab && (value.is_empty() || is_new_tab(value))) {
-            return Reading::Editing;
-        }
-        if let Some(host) = host(value) {
-            return Reading::Site { host, title };
-        }
-        if new_tab {
-            Reading::NewTab
-        } else if matches!(
-            value.to_ascii_lowercase().trim_end_matches('/'),
-            "brave://history"
-                | "chrome://history"
-                | "edge://history"
-                | "vivaldi://history"
-                | "opera://history"
-        ) {
-            Reading::History
+        let committed = if editing || value.is_empty() {
+            automation.and_then(|uia| committed_document(uia, hwnd))
         } else {
-            Reading::Unknown(title)
+            None
+        };
+        if GetForegroundWindow() != foreground {
+            return Reading::Unknown(None);
         }
+        classify_address(value, editing, committed.as_deref(), title)
     }
+}
+
+fn classify_address(
+    value: &str,
+    editing: bool,
+    committed: Option<&str>,
+    title: Option<String>,
+) -> Reading {
+    let verified_edit = editing
+        && committed
+            .and_then(host)
+            .zip(host(value))
+            .is_some_and(|(document, entered)| {
+                document.trim_start_matches("www.") == entered.trim_start_matches("www.")
+            });
+    let address = if verified_edit || !editing {
+        committed.unwrap_or(value)
+    } else {
+        value
+    };
+    let new_tab = is_new_tab(value)
+        || title.as_deref().is_some_and(|title| {
+            matches!(
+                title.to_ascii_lowercase().as_str(),
+                "new tab" | "new tab page" | "start page" | "speed dial"
+            )
+        });
+    if editing && !verified_edit && !(new_tab && (value.is_empty() || is_new_tab(value))) {
+        return Reading::Editing;
+    }
+    if let Some(host) = host(address) {
+        return Reading::Site { host, title };
+    }
+    if new_tab {
+        Reading::NewTab
+    } else if matches!(
+        value.to_ascii_lowercase().trim_end_matches('/'),
+        "brave://history"
+            | "chrome://history"
+            | "edge://history"
+            | "vivaldi://history"
+            | "opera://history"
+    ) {
+        Reading::History
+    } else {
+        Reading::Unknown(title)
+    }
+}
+
+fn committed_document(automation: &IUIAutomation, hwnd: HWND) -> Option<String> {
+    unsafe {
+        let window = automation.ElementFromHandle(hwnd).ok()?;
+        let condition = automation
+            .CreatePropertyCondition(
+                UIA_ControlTypePropertyId,
+                &UIA_DocumentControlTypeId.0.into(),
+            )
+            .ok()?;
+        let doc = window.FindFirst(TreeScope_Descendants, &condition).ok()?;
+        let url = doc
+            .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+            .and_then(|pattern| pattern.CurrentValue())
+            .or_else(|_| {
+                doc.GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
+                    UIA_LegacyIAccessiblePatternId,
+                )
+                .and_then(|pattern| pattern.CurrentValue())
+            })
+            .ok()?
+            .to_string();
+        host(&url)?;
+        Some(url)
+    }
+}
+
+fn desktop_allowed(exe: &str, custom: &[String]) -> bool {
+    custom.iter().any(|name| name == &app_name(exe))
+        || matches!(
+            exe,
+            "explorer"
+                | "shellhost"
+                | "shellexperiencehost"
+                | "startmenuexperiencehost"
+                | "searchhost"
+                | "searchapp"
+                | "systemsettings"
+                | "systemsettingsbroker"
+                | "taskmgr"
+                | "lockapp"
+                | "applicationframehost"
+                | "textinputhost"
+                | "snippingtool"
+                | "screenclippinghost"
+                | "dwm"
+                | "ctfmon"
+                | "smartscreen"
+                | "windowsterminal"
+                | "openconsole"
+                | "conhost"
+                | "cmd"
+                | "powershell"
+                | "pwsh"
+                | "notepad"
+                | "notepad++"
+                | "code"
+                | "code-insiders"
+                | "cursor"
+                | "obsidian"
+                | "notion"
+                | "onenote"
+                | "winword"
+                | "excel"
+                | "powerpnt"
+                | "soffice"
+                | "soffice.bin"
+                | "acrobat"
+                | "acrord32"
+                | "sumatrapdf"
+                | "foxitpdfreader"
+                | "calc"
+                | "calculatorapp"
+                | "anki"
+                | "zotero"
+                | "whatsapp"
+        )
 }
 
 unsafe fn address(
@@ -295,11 +499,13 @@ struct Volume {
     muted: bool,
 }
 
-fn size_distraction_banner(window: &tauri::WebviewWindow) {
+fn foreground_bounds() -> Option<RECT> {
     let mut rect = RECT::default();
-    if unsafe { GetWindowRect(GetForegroundWindow(), &mut rect) }.is_err() {
-        return;
-    }
+    unsafe { GetWindowRect(GetForegroundWindow(), &mut rect).ok()? };
+    Some(rect)
+}
+
+fn size_distraction_banner(window: &tauri::WebviewWindow, rect: RECT) {
     let width = rect.right - rect.left;
     let height = rect.bottom - rect.top;
     if width <= 0 || height <= 0 {
@@ -382,9 +588,8 @@ pub fn start(
         let initialized = CoInitializeEx(None, COINIT_MULTITHREADED).is_ok();
         let automation: Option<IUIAutomation> =
             CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL).ok();
-        let mut showing = false;
-        let mut reminder_visible = false;
         let mut address_cache = None;
+        let mut last_blocked_area = None;
         let session = app.state::<Session>();
         while !stop.load(Ordering::Acquire) {
             let running = session.running.lock().ok().and_then(|state| {
@@ -394,6 +599,15 @@ pub fn start(
                     .map(|run| run.started)
             });
             let reading = running.map(|_| foreground(automation.as_ref(), &mut address_cache));
+            let outside_app = matches!(
+                &reading,
+                Some(
+                    Reading::Site { .. }
+                        | Reading::History
+                        | Reading::Desktop { .. }
+                        | Reading::NewTab
+                )
+            );
             let mut blocked = false;
             let mut reminder_pending = false;
             let mut reminder_overdue = false;
@@ -427,14 +641,17 @@ pub fn start(
                             run.new_tab_since = None;
                             run.blocked_site = None;
                         }
-                        Some(Reading::Desktop) => {
-                            run.active_tab = None;
+                        Some(Reading::Desktop { exe, title }) => {
+                            run.active_tab = title.or_else(|| Some(format!("{exe}.exe")));
                             run.new_tab_since = None;
-                            run.in_distraction = false;
-                            run.blocked_site = None;
+                            run.blocked_site = (!desktop_allowed(&exe, &run.allowed_apps))
+                                .then(|| format!("Desktop app: {exe}.exe"));
+                            if run.blocked_site.is_none() {
+                                run.in_distraction = false;
+                            }
                         }
                         Some(Reading::Unknown(title)) => {
-                            run.active_tab = title;
+                            run.active_tab = title.map(|_| "Address unavailable".to_owned());
                             run.new_tab_since = None;
                             run.blocked_site = None;
                         }
@@ -460,47 +677,48 @@ pub fn start(
                     active.store(false, Ordering::Release);
                 }
             }
-            if showing != blocked {
-                if let Some(window) = app.get_webview_window("alarm") {
-                    let result = if blocked {
-                        size_distraction_banner(&window);
-                        window.show()
-                    } else {
-                        window.hide()
-                    };
-                    if result.is_ok() {
-                        showing = blocked;
-                    }
-                }
-                if blocked && reminder_visible && reminder_pending {
-                    use windows_sys::Win32::UI::WindowsAndMessaging::{
-                        SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-                    };
-                    if let Some(hwnd) = app
-                        .get_webview_window("reminder")
-                        .and_then(|window| window.hwnd().ok())
-                    {
-                        SetWindowPos(
-                            hwnd.0,
-                            HWND_TOPMOST,
-                            0,
-                            0,
-                            0,
-                            0,
-                            SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
-                        );
-                    }
-                }
+            if blocked && outside_app {
+                last_blocked_area = foreground_bounds();
             }
-            if reminder_visible != reminder_pending {
-                if let Some(window) = app.get_webview_window("reminder") {
-                    let _ = if reminder_pending {
-                        window.show()
-                    } else {
-                        window.hide()
-                    };
-                }
-                reminder_visible = reminder_pending;
+            if blocked
+                || reminder_pending
+                || overlay_visible(&app, "alarm")
+                || overlay_visible(&app, "reminder")
+            {
+                let handle = app.clone();
+                let area = last_blocked_area;
+                let _ = app.run_on_main_thread(move || {
+                    let (alarm, reminder) = overlay_targets(
+                        blocked,
+                        reminder_pending,
+                        overlay_visible(&handle, "quit"),
+                    );
+                    if let Some(window) = handle.get_webview_window("alarm") {
+                        let visible = window.is_visible().unwrap_or(false);
+                        if !alarm && visible {
+                            let _ = window.hide();
+                        }
+                    }
+                    if let Some(window) = handle.get_webview_window("reminder") {
+                        let visible = window.is_visible().unwrap_or(false);
+                        if reminder && !visible {
+                            let _ = window.show();
+                        }
+                        if !reminder && visible {
+                            let _ = window.hide();
+                        }
+                    }
+                    if alarm {
+                        if let Some(window) = handle.get_webview_window("alarm") {
+                            if !window.is_visible().unwrap_or(false) {
+                                if let Some(area) = area {
+                                    size_distraction_banner(&window, area);
+                                }
+                                let _ = window.show();
+                            }
+                        }
+                    }
+                });
             }
             thread::sleep(Duration::from_millis(90));
         }
@@ -510,4 +728,76 @@ pub fn start(
         }
     });
     audio
+}
+
+fn overlay_visible(app: &AppHandle, label: &str) -> bool {
+    app.get_webview_window(label)
+        .is_some_and(|window| window.is_visible().unwrap_or(false))
+}
+
+fn overlay_targets(blocked: bool, reminder_pending: bool, quit_visible: bool) -> (bool, bool) {
+    (
+        blocked && !reminder_pending && !quit_visible,
+        reminder_pending && !quit_visible,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn friendly_inputs_resolve_to_canonical_rules() {
+        let rules =
+            website_rules("gemini, Notebook LM, whatsap.com, gmeet.com, example.edu").unwrap();
+        assert!(rules.iter().any(|rule| rule == "gemini.google.com"));
+        assert!(rules.iter().any(|rule| rule == "notebooklm.google.com"));
+        assert!(rules.iter().any(|rule| rule == "whatsapp.com"));
+        assert!(!rules.iter().any(|rule| rule == "whatsap.com"));
+        assert!(rules.iter().any(|rule| rule == "meet.google.com"));
+        assert!(rules.iter().any(|rule| rule == "example.edu"));
+        assert!(desktop_allowed("chatgpt", &[app_name("ChatGPT app")]));
+    }
+
+    #[test]
+    fn standard_study_and_shell_apps_are_allowed() {
+        assert!(desktop_allowed("explorer", &[]));
+        assert!(desktop_allowed("winword", &[]));
+        assert!(!desktop_allowed("codex", &[]));
+        assert!(desktop_allowed("codex", &["codex".into()]));
+        assert!(!desktop_allowed("steam", &[]));
+    }
+
+    #[test]
+    fn typed_address_does_not_replace_the_committed_page() {
+        assert!(matches!(
+            classify_address(
+                "google.com/search?q=test",
+                true,
+                Some("https://chatgpt.com/c/123"),
+                None
+            ),
+            Reading::Editing
+        ));
+        assert!(matches!(
+            classify_address("google.com/search?q=test", true, Some("https://www.google.com/search?q=test"), None),
+            Reading::Site { host, .. } if host == "www.google.com"
+        ));
+        assert!(matches!(
+            classify_address("www.google.com/search?q=test", true, Some("https://www.google.com/search?q=test"), None),
+            Reading::Site { host, .. } if host == "www.google.com"
+        ));
+        assert!(matches!(
+            classify_address("", false, Some("https://chatgpt.com/c/123"), None),
+            Reading::Site { host, .. } if host == "chatgpt.com"
+        ));
+    }
+
+    #[test]
+    fn overlay_priorities_are_exclusive() {
+        assert_eq!(overlay_targets(true, false, false), (true, false));
+        assert_eq!(overlay_targets(true, true, false), (false, true));
+        assert_eq!(overlay_targets(true, true, true), (false, false));
+        assert_eq!(overlay_targets(false, false, false), (false, false));
+    }
 }

@@ -11,7 +11,11 @@
 <main id="dashboard" hidden>
   <header class="masthead">
     <a class="brand" href="index.html" aria-label="Focuzzer home"><span class="brand-mark" aria-hidden="true">✦</span> Focuzzer</a>
-    <button id="sound" class="quiet-button" type="button" aria-pressed="true">Sound on</button>
+    <nav class="header-actions" aria-label="App information and sound">
+      <button id="show-help" class="quiet-button" type="button">How this app works</button>
+      <button id="show-about" class="quiet-button" type="button">About</button>
+      <button id="sound" class="quiet-button" type="button" aria-pressed="true">Sound on</button>
+    </nav>
   </header>
   <div class="intro"><h1>Make time for focus.</h1><p>Set a goal, start a timer, and settle into your work.</p></div>
   <div class="layout">
@@ -19,24 +23,38 @@
       <h2>New session</h2>
       <label for="goal">Study goal</label>
       <input id="goal" name="goal" maxlength="100" placeholder="What are you working on?">
-      <label for="minutes">Duration</label>
-      <div class="duration">
-        <div class="segmented" id="presets" aria-label="Duration presets">
-          <button type="button" data-minutes="25">25 min</button>
-          <button type="button" data-minutes="45">45 min</button>
-          <button type="button" data-minutes="60">60 min</button>
-        </div>
+      <div class="duration-heading">
+        <label for="minutes">Duration</label>
         <div class="minute-field"><input id="minutes" name="minutes" type="number" min="1" max="180" value="25" required><span>min</span></div>
       </div>
-      <label for="site-mode">Website rules</label>
-      <select id="site-mode"><option value="allowlist">Allowlist only</option><option value="blocklist">Blocklist only</option></select>
-      <label for="sites" id="sites-label">Extra allowed websites</label>
-      <input id="sites" name="sites" maxlength="2000" placeholder="meet.google.com, example.edu" aria-describedby="site-defaults">
-      <p id="site-defaults" class="field-note">ChatGPT, Gemini, NotebookLM, and WhatsApp are included.</p>
-      <label for="blocked-sites">Blocked websites</label>
-      <input id="blocked-sites" name="blockedSites" maxlength="2000" placeholder="youtube.com, x.com">
-      <p class="field-note">Blocked websites override allowed ones. Browser History is always blocked.</p>
-      <button class="primary" type="submit" id="start"><span>Start challenge</span><span aria-hidden="true">↗</span></button>
+      <div id="duration-ruler" class="duration-ruler" role="slider" tabindex="0" aria-label="Session duration"
+        aria-valuemin="1" aria-valuemax="180" aria-valuenow="25" aria-valuetext="25 minutes" aria-describedby="duration-help">
+        <div id="duration-scale" class="duration-scale" aria-hidden="true"></div>
+        <span class="duration-needle" aria-hidden="true"></span>
+      </div>
+      <p id="duration-help" class="field-note">Drag or scroll to adjust. The arrow keys change the duration by one minute.</p>
+      <div class="allowed-fields">
+        <div>
+          <label for="allowed-apps">Allowed apps</label>
+          <input id="allowed-apps" maxlength="2000" placeholder="System apps, ChatGPT app, Word">
+        </div>
+        <div id="allowed-websites-field">
+          <label for="sites">Allowed websites</label>
+          <input id="sites" name="sites" maxlength="2000" placeholder="Gemini, Notebook LM, WhatsApp" aria-describedby="site-defaults">
+          <p id="site-defaults" class="field-note">Separate names or links with commas.</p>
+        </div>
+      </div>
+      <details class="advanced-rules">
+        <summary>Advanced website rules</summary>
+        <label for="site-mode">Website mode</label>
+        <select id="site-mode"><option value="allowlist">Allowlist only</option><option value="blocklist">Blocklist only</option></select>
+        <label for="blocked-sites">Blocked websites</label>
+        <input id="blocked-sites" name="blockedSites" maxlength="2000" placeholder="youtube.com, x.com">
+      </details>
+      <button class="primary" type="submit" id="start">
+        <span>Start challenge</span><span aria-hidden="true">↗</span>
+        <span class="start-sparkles" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+      </button>
       <p id="dashboard-status" role="status" hidden></p>
     </form>
     <div class="right-stack">
@@ -53,6 +71,23 @@
       <section class="surface history"><h2>Recent sessions</h2><ul id="history"></ul></section>
     </div>
   </div>
+  <dialog id="dashboard-info" aria-labelledby="dashboard-info-title">
+    <h2 id="dashboard-info-title"></h2>
+    <section id="help-content" hidden>
+      <ol>
+        <li>Set a duration and add the apps and websites you want available while you study.</li>
+        <li>Start the challenge. Hover over the floating timer to see your goal and time remaining.</li>
+        <li>Switch to an allowed app or site to clear a distraction alarm. Confirm you’re studying at the halfway check-in.</li>
+        <li>Finish when the timer ends, or choose End early and type the quit code.</li>
+      </ol>
+    </section>
+    <section id="about-content" hidden>
+      <p>Made with love by <strong>@sskdgret</strong>.</p>
+      <a id="repo-link" href="https://github.com/SanjaySK13/Focuzzer" target="_blank" rel="noopener noreferrer">Focuzzer on GitHub ↗</a>
+      <p id="repo-status" role="status" hidden></p>
+    </section>
+    <form method="dialog"><button class="quiet-button" type="submit">Done</button></form>
+  </dialog>
 </main>
 
 <section id="floating" class="floating" aria-label="Floating focus timer" hidden>
@@ -84,7 +119,7 @@
 </dialog>
 <section id="alarm-banner" class="alarm-banner" hidden aria-label="Distraction detected">
   <div class="alarm-icon" aria-hidden="true">!</div>
-  <div><h1>Return to focus</h1><p id="blocked-site"></p><p>Open an allowed website to silence the alarm.</p></div>
+  <div><h1>Return to focus</h1><p id="blocked-site"></p><p>Switch to an allowed site or app to silence the alarm.</p></div>
 </section>
 <section id="reminder-card" class="reminder-card" hidden aria-labelledby="reminder-title">
   <p class="reminder-label">Halfway check-in</p>

@@ -29,6 +29,8 @@ struct Plan {
     blocked_sites: String,
     #[serde(default)]
     blocklist_mode: bool,
+    #[serde(default)]
+    allowed_apps: String,
 }
 
 struct Running {
@@ -36,6 +38,7 @@ struct Running {
     started: Instant,
     rules: Vec<String>,
     blocked_rules: Vec<String>,
+    allowed_apps: Vec<String>,
     distractions: u32,
     in_distraction: bool,
     blocked_site: Option<String>,
@@ -90,6 +93,7 @@ fn begin(plan: Plan, session: State<Session>) -> Result<(), String> {
         || plan.goal.chars().count() > 100
         || plan.sites.len() > 2000
         || plan.blocked_sites.len() > 2000
+        || plan.allowed_apps.len() > 2000
     {
         return Err("Check the session settings and try again.".into());
     }
@@ -97,21 +101,8 @@ fn begin(plan: Plan, session: State<Session>) -> Result<(), String> {
     if state.is_some() {
         return Err("A session is already running.".into());
     }
-    let mut rules = Vec::new();
+    let rules = focus::website_rules(&plan.sites)?;
     let mut blocked_rules = Vec::new();
-    #[cfg(windows)]
-    for value in plan
-        .sites
-        .split(|c: char| c == ',' || c.is_whitespace())
-        .filter(|s| !s.is_empty())
-    {
-        let host =
-            focus::host(value).ok_or_else(|| format!("Enter a domain or URL for {value}."))?;
-        if host == "gmeet.com" || host == "www.gmeet.com" {
-            rules.push("meet.google.com".to_owned());
-        }
-        rules.push(host.trim_start_matches("www.").to_owned());
-    }
     for value in plan
         .blocked_sites
         .split(|c: char| c == ',' || c.is_whitespace())
@@ -122,6 +113,13 @@ fn begin(plan: Plan, session: State<Session>) -> Result<(), String> {
         blocked_rules.push(host.trim_start_matches("www.").to_owned());
     }
     *state = Some(Running {
+        allowed_apps: plan
+            .allowed_apps
+            .split([',', '\n'])
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(focus::app_name)
+            .collect(),
         plan,
         started: Instant::now(),
         rules,
@@ -250,6 +248,10 @@ fn quit_code(session: State<Session>) -> Result<String, String> {
 
 #[tauri::command]
 fn open_quit(app: AppHandle) -> Result<(), String> {
+    window(&app, "alarm")?.hide().map_err(|e| e.to_string())?;
+    window(&app, "reminder")?
+        .hide()
+        .map_err(|e| e.to_string())?;
     let dialog = window(&app, "quit")?;
     dialog.show().map_err(|e| e.to_string())?;
     dialog.set_focus().map_err(|e| e.to_string())
@@ -258,6 +260,16 @@ fn open_quit(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn close_quit(app: AppHandle) -> Result<(), String> {
     window(&app, "quit")?.hide().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn open_repo() -> Result<(), String> {
+    let windows = std::env::var_os("SystemRoot").ok_or("Windows system folder unavailable.")?;
+    std::process::Command::new(std::path::PathBuf::from(windows).join("explorer.exe"))
+        .arg("https://github.com/SanjaySK13/Focuzzer")
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -335,9 +347,9 @@ fn show_pill(app: AppHandle) -> Result<(), String> {
     let pill = window(&app, "pill")?;
     if let Some(monitor) = main.current_monitor().map_err(|e| e.to_string())? {
         let scale = monitor.scale_factor();
-        let x =
-            monitor.position().x + monitor.size().width as i32 / 2 - (98.0 * scale).round() as i32;
-        let y = monitor.position().y + (32.0 * scale).round() as i32;
+        let area = monitor.work_area();
+        let x = area.position.x + area.size.width as i32 / 2 - (98.0 * scale).round() as i32;
+        let y = area.position.y + area.size.height as i32 - (174.0 * scale).round() as i32;
         pill.set_position(tauri::PhysicalPosition::new(x, y))
             .map_err(|e| e.to_string())?;
     }
@@ -443,6 +455,7 @@ fn main() {
             delete_session,
             quit_code,
             open_quit,
+            open_repo,
             close_quit,
             finish,
             show_pill,

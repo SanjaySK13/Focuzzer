@@ -20,6 +20,7 @@ let fillFrame;
 let visibleProgress = 0;
 let won = false;
 let audio;
+let nextClockTick = 0;
 let pendingHandoff = false;
 
 function stored(key, fallback) {
@@ -78,8 +79,8 @@ const phrases = {
 const interfaceCues = {
   tap: ["click_003", .18],
   select: ["toggle_001", .20],
-  countdown: ["tick_004", .23],
-  colorFill: ["glass_005", .20],
+  countdown: ["pluck_001", .20],
+  colorFill: ["glass_006", .20],
   duration: ["select_004", .18],
   deletePrompt: ["question_002", .19],
   deleted: ["drop_002", .22],
@@ -125,6 +126,36 @@ function sound(cue, enabled) {
   } catch (error) { console.warn(error); }
 }
 
+function clockTicks(count, enabled) {
+  if (!enabled || count === 0) return;
+  count = Math.min(count, 12);
+  try {
+    audio ??= new AudioContext();
+    const context = audio;
+    const play = () => {
+      const now = context.currentTime;
+      const start = Math.max(now + .008, Math.min(nextClockTick, now + .035));
+      const interval = Math.min(.024, .09 / count);
+      for (let i = 0; i < count; i++) {
+        const time = start + interval * i;
+        const tone = context.createOscillator();
+        const gain = context.createGain();
+        tone.type = "triangle";
+        tone.frequency.setValueAtTime(1840, time);
+        tone.frequency.exponentialRampToValueAtTime(670, time + .012);
+        gain.gain.setValueAtTime(.048, time);
+        gain.gain.exponentialRampToValueAtTime(.001, time + .016);
+        tone.connect(gain).connect(context.destination);
+        tone.start(time);
+        tone.stop(time + .017);
+      }
+      nextClockTick = start + Math.min(.09, interval * count);
+    };
+    if (context.state === "running") play();
+    else void context.resume().then(play).catch(console.warn);
+  } catch (error) { console.warn(error); }
+}
+
 function clock(seconds) {
   const value = Math.max(0, Math.ceil(seconds));
   return `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
@@ -136,19 +167,149 @@ function status(id, message = "") {
 }
 
 const settings = {
-  minutes: 25, goal: "", style: "digits", sound: true, sites: "", blockedSites: "", blocklistMode: false,
+  minutes: 25, goal: "", style: "digits", sound: true, sites: "", blockedSites: "", blocklistMode: false, allowedApps: "",
   ...stored("rusted-plan", {}),
 };
 
 function updateSettings() {
-  for (const button of document.querySelectorAll("[data-minutes]"))
-    button.setAttribute("aria-pressed", Number(button.dataset.minutes) === settings.minutes);
   for (const button of document.querySelectorAll("[data-style]"))
     button.setAttribute("aria-pressed", button.dataset.style === settings.style);
   $("sample").classList.toggle("is-fill", settings.style === "fill");
   $("sample").querySelector(".sample-digits").textContent = settings.style === "fill" ? "Focus" : clock(settings.minutes * 60);
   $("sound").textContent = settings.sound ? "Sound on" : "Sound off";
   $("sound").setAttribute("aria-pressed", settings.sound);
+}
+
+function setupDurationRuler() {
+  const ruler = $("duration-ruler");
+  const scale = $("duration-scale");
+  const input = $("minutes");
+  const minimum = Number(input.min);
+  const maximum = Number(input.max);
+  const spacing = parseFloat(getComputedStyle(ruler).getPropertyValue("--tick-step"));
+  const stops = [10, 20, 30, 40, 50, 60, 90, 120];
+  const clamp = (value) => Math.max(minimum, Math.min(maximum, value));
+  const shortLabel = (minute) => minute === 90 ? "1.5 hr" : minute === 120 ? "2 hr" : String(minute);
+  const displayLabel = (minute) => minute === 1 ? "1 minute" : `${minute} minutes`;
+  const marks = document.createDocumentFragment();
+  for (let minute = minimum; minute <= maximum; minute++) {
+    const mark = document.createElement("div");
+    const major = stops.includes(minute);
+    mark.className = "duration-mark" + (major ? " major" : minute % 5 === 0 ? " medium" : "");
+    if (major) mark.append(Object.assign(document.createElement("span"), { textContent: shortLabel(minute) }));
+    marks.append(mark);
+  }
+  scale.append(marks);
+
+  let position = clamp(Number(settings.minutes) || 25);
+  let drag = null;
+  let animation;
+  let settleTimer;
+
+  function setPosition(value, tick = false) {
+    position = clamp(value);
+    scale.style.transform = `translateX(${-(position - minimum + .5) * spacing}px)`;
+    const minute = Math.round(position);
+    const crossed = Math.abs(minute - settings.minutes);
+    settings.minutes = minute;
+    input.value = minute;
+    ruler.setAttribute("aria-valuenow", minute);
+    ruler.setAttribute("aria-valuetext", displayLabel(minute));
+    if (crossed) {
+      updateSettings();
+      if (tick) clockTicks(crossed, settings.sound);
+    }
+  }
+
+  function interrupt() {
+    if (animation !== undefined) cancelAnimationFrame(animation);
+    animation = undefined;
+    clearTimeout(settleTimer);
+    ruler.classList.remove("magnetic");
+  }
+
+  function settle() {
+    const nearest = stops.reduce((best, stop) =>
+      Math.abs(position - stop) < Math.abs(position - best) ? stop : best);
+    const magnetic = Math.abs(position - nearest) <= 2;
+    const target = magnetic ? nearest : Math.round(position);
+    if (magnetic && position !== target) ruler.classList.add("magnetic");
+    if (reduceMotion.matches || Math.abs(position - target) < .01) {
+      setPosition(target, true);
+      return;
+    }
+    let velocity = 0;
+    let previous = performance.now();
+    function spring(now) {
+      const seconds = Math.min(.025, (now - previous) / 1000);
+      previous = now;
+      velocity += (900 * (target - position) - 58 * velocity) * seconds;
+      setPosition(position + velocity * seconds, true);
+      if (Math.abs(position - target) < .012 && Math.abs(velocity) < .16) {
+        setPosition(target, true);
+        animation = undefined;
+      } else {
+        animation = requestAnimationFrame(spring);
+      }
+    }
+    animation = requestAnimationFrame(spring);
+  }
+
+  ruler.addEventListener("pointerdown", (event) => {
+    if (drag || !event.isPrimary || event.button !== 0) return;
+    interrupt();
+    ruler.focus({ preventScroll: true });
+    ruler.setPointerCapture(event.pointerId);
+    drag = { id: event.pointerId, x: event.clientX, position, moved: false };
+    ruler.classList.add("dragging");
+  });
+  ruler.addEventListener("pointermove", (event) => {
+    if (drag?.id !== event.pointerId) return;
+    const distance = drag.x - event.clientX;
+    if (Math.abs(distance) > 4) drag.moved = true;
+    if (drag.moved) setPosition(drag.position + distance / spacing, true);
+  });
+  function endDrag(event) {
+    if (drag?.id !== event.pointerId) return;
+    if (event.type === "pointerup" && !drag.moved) {
+      const rect = ruler.getBoundingClientRect();
+      setPosition(position + (event.clientX - rect.left - rect.width / 2) / spacing, true);
+    }
+    drag = null;
+    ruler.classList.remove("dragging");
+    settle();
+  }
+  for (const event of ["pointerup", "pointercancel", "lostpointercapture"]) {
+    ruler.addEventListener(event, endDrag);
+  }
+  ruler.addEventListener("wheel", (event) => {
+    if (event.ctrlKey || drag) return;
+    const horizontal = Math.abs(event.deltaX) > Math.abs(event.deltaY);
+    const units = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? ruler.clientWidth : 1;
+    const delta = (horizontal ? event.deltaX : event.deltaY * .45) * units / spacing;
+    if (!delta) return;
+    event.preventDefault();
+    interrupt();
+    setPosition(position + delta, true);
+    settleTimer = setTimeout(settle, 155);
+  }, { passive: false });
+  ruler.addEventListener("keydown", (event) => {
+    const current = Math.round(position);
+    const targets = { ArrowLeft: current - 1, ArrowDown: current - 1,
+      ArrowRight: current + 1, ArrowUp: current + 1, PageDown: current - 10,
+      PageUp: current + 10, Home: minimum, End: maximum };
+    if (!Object.hasOwn(targets, event.key)) return;
+    event.preventDefault();
+    interrupt();
+    setPosition(targets[event.key], true);
+  });
+  input.oninput = () => {
+    if (!input.validity.valid) return;
+    interrupt();
+    setPosition(input.valueAsNumber);
+  };
+  input.onchange = () => { if (input.validity.valid) sound("duration", settings.sound); };
+  setPosition(position);
 }
 
 async function refreshHistory() {
@@ -221,21 +382,39 @@ document.addEventListener("click", (event) => {
   const button = event.target.closest("button");
   if (!button || button.disabled || button.dataset.sound === "manual" ||
       ["start", "finish", "quit-confirm", "quit-cancel", "sound", "confirm-studying"].includes(button.id)) return;
-  const { minutes, style } = button.dataset;
-  const cue = minutes ? "duration" : style === "digits" ? "countdown" : style === "fill" ? "colorFill" : "tap";
+  const { style } = button.dataset;
+  const cue = style === "digits" ? "countdown" : style === "fill" ? "colorFill" : "tap";
   sound(cue, snapshot?.plan.sound ?? settings.sound);
 }, { capture: true });
 
 if (!pillPage && !alarmPage && !quitPage && !reminderPage) {
+  root.classList.add("dashboard-root");
   dashboard.hidden = false;
+  const info = $("dashboard-info");
+  function showInfo(about) {
+    $("dashboard-info-title").textContent = about ? "About Focuzzer" : "How this app works";
+    $("help-content").hidden = about;
+    $("about-content").hidden = !about;
+    status("repo-status");
+    info.showModal();
+  }
+  $("show-help").onclick = () => showInfo(false);
+  $("show-about").onclick = () => showInfo(true);
+  $("repo-link").onclick = async (event) => {
+    if (!desktop) return;
+    event.preventDefault();
+    try { await command("open_repo"); }
+    catch (error) { status("repo-status", String(error)); }
+  };
   $("minutes").value = settings.minutes;
   $("goal").value = settings.goal;
   $("sites").value = settings.sites;
   $("blocked-sites").value = settings.blockedSites;
+  $("allowed-apps").value = settings.allowedApps;
   $("site-mode").value = settings.blocklistMode ? "blocklist" : "allowlist";
   function updateSiteMode() {
     settings.blocklistMode = $("site-mode").value === "blocklist";
-    for (const id of ["sites", "sites-label", "site-defaults"]) $(id).hidden = settings.blocklistMode;
+    $("allowed-websites-field").hidden = settings.blocklistMode;
   }
   $("site-mode").onchange = updateSiteMode;
   updateSiteMode();
@@ -243,11 +422,7 @@ if (!pillPage && !alarmPage && !quitPage && !reminderPage) {
   void refreshHistory();
   window.addEventListener("focus", refreshHistory);
   $("sound").onclick = () => { settings.sound = !settings.sound; updateSettings(); sound("select", settings.sound); };
-  $("minutes").oninput = () => { settings.minutes = Number($("minutes").value); updateSettings(); };
-  $("minutes").onchange = () => { if ($("minutes").validity.valid) sound("duration", settings.sound); };
-  for (const button of document.querySelectorAll("[data-minutes]")) {
-    button.onclick = () => { $("minutes").value = button.dataset.minutes; $("minutes").oninput(); };
-  }
+  setupDurationRuler();
   for (const button of document.querySelectorAll("[data-style]")) {
     button.onclick = () => { settings.style = button.dataset.style; updateSettings(); };
   }
@@ -261,6 +436,7 @@ if (!pillPage && !alarmPage && !quitPage && !reminderPage) {
         settings.goal = $("goal").value.trim();
         settings.sites = $("sites").value.trim();
         settings.blockedSites = $("blocked-sites").value.trim();
+        settings.allowedApps = $("allowed-apps").value.trim();
         saveLocal("rusted-plan", settings);
         await command("begin", { plan: { ...settings } });
         pendingHandoff = true;
