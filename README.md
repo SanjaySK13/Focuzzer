@@ -1,85 +1,27 @@
-# 🛡️ Focuzzer: Hardcore Anti-Distraction Study Sentinel
+# Focuzzer
 
-> **Built for extreme digital addiction & zero-distraction study lock-in.**
+A lightweight Windows focus timer and distraction blocker built with Rust and Tauri. Set a study goal, pick your allowed or blocked apps and websites, and stay locked in until the timer finishes.
 
----
+## Download
 
-## ⚡ Quick Start (How to Run)
+Download the latest `focuzzer-rusted.exe` from the [Releases](https://github.com/SanjaySK13/Focuzzer/releases) page and run it directly. No installation or terminal required.
 
-Navigate to the `focusguard` folder:
-`C:\Users\sanja\.gemini\antigravity\scratch\focusguard`
+## Features
 
-1. **Option A (Standard Launcher):**
-   - Double-click **`run_focuzzer.bat`** (or **`run_focus_guard.bat`**)
-2. **Option B (Silent Background Launcher - No Terminal):**
-   - Double-click **`run_silent.vbs`**
+- **Distraction Blocking:** Monitors the active window and browser address bar. Opening a blocked app or website triggers a full-volume alarm and on-screen alert until you return to your work.
+- **Allowlist & Blocklist Modes:** Choose from preset study tools and websites or add your own custom domains and apps.
+- **Floating Timer Pill:** An always-on-top compact pill with two styles—Countdown and Color Fill. Click it when a session ends to view your stats.
+- **Impulse-Proof Early Quit:** Ending a session early requires manually typing a randomized quit code.
+- **Study Check-Ins & History:** Periodic halfway check-ins keep you on track, and completed sessions are saved with timestamps.
 
----
+## Build from Source
 
-## 🔒 How It Works
+Requires the Rust MSVC toolchain, Visual Studio Build Tools (C++ workload), and Microsoft Edge WebView2 Runtime:
 
-Use the **Style** picker on the main screen to switch between **Basic** and **Apple**. Focuzzer remembers your choice. Apple style uses translucent dark surfaces, rounded cards and a floating pill, with short fade-in animations.
-
-### 1. The Whitelist Barrier & Custom URL Support
-- **Default Allowed Sites:**
-  - **NotebookLM** (`notebooklm.google.com`)
-  - **Gemini** (`gemini.google.com`)
-  - **WhatsApp** (`web.whatsapp.com` or desktop app)
-  - *Plus local study tools:* VS Code, Obsidian, Notion, PDF Readers, Notepad, Anki.
-- **Whitelist ANY Custom Site or URL:**
-  - Type or paste any website or URL in the setup field (e.g. `discord.com`, `https://discord.com`, `leetcode.com`, `claude.ai`, `chatgpt.com`).
-  - **Smart Expansion:** Typing `discord.com` automatically extracts and whitelists both the domain (`discord.com`) and the keyword (`discord`), covering both the browser tab and the desktop app (`Discord.exe`).
-  - **Priority Override:** Explicitly whitelisted sites override the default blacklist!
-  - **Google Meet:** Enter `gmeet.com`, `meet.google.com`, or a full meeting link to allow Google Meet for the session.
-  - **Remembered Across Restarts:** Saved in `config.json` so your custom sites stay saved.
-- **Forbidden Sites & Apps:**
-  - Unlisted websites and desktop apps flagged as distractions (such as Discord or Steam) trigger the alarm unless you whitelist them. Windows utilities and other desktop apps are allowed by default.
-  - **Action on Violation:**
-    1. Cranks Windows master volume up to **100%**.
-    2. Blasts a piercing alternating dual-tone siren (`2800 Hz` & `1800 Hz`).
-    3. Flashes a prominent red alert banner directly on top of your screen:
-       `🚨 DISTRACTION DETECTED: [Site Name]! GET BACK TO STUDYING!`
-    4. The siren stops **immediately** the moment you click back into NotebookLM, Gemini, or WhatsApp!
-
-### 2. The Strict Session Lock & Jumbled Quitting Challenge
-- At the start of your session, you choose your commitment duration (e.g. 30m, 45m, 1h, 2h, 3h, or custom).
-- Once you click **"START HARDCORE STUDY SESSION"**:
-  - The **Switch Off button is completely LOCKED and DISABLED**.
-  - Closing via `[X]` or `Alt+F4` is intercepted.
-  - The HUD displays a real-time countdown: `🔒 Switch-off unlocks in: HH:MM:SS`.
-  - **Only when your target duration finishes** does the switch-off button dynamically unlock, turn glowing green, and allow you to end the session!
-- **Quitting Verification Challenge:**
-  - If you attempt to quit early or override the session, you **MUST manually type a 26-character randomized jumbled line of characters, numbers, and symbols** (e.g., `G&WCHY6nL2QRfxKb#5VGg!TmLF`).
-  - **Anti-Cheat Enforcement:** Copy & Paste (`Ctrl+V`, `Shift+Insert`, right-click) is **COMPLETELY DISABLED** on the input box. You must type every character one-by-one, forcing your brain to pause and snap out of impulse quitting!
-
-### 3. Verification Prompts: Hourly & Random Midpoint Checker
-- **Random Midpoint Focus Checker (Halfway ± 10s):**
-  - Triggers randomly within `± 10 seconds` of your session's exact midpoint (e.g. at 14m 52s for a 30m session, or 29m 55s for a 1-hour session).
-  - A small, compact card pops up requiring you to press **Enter**, **Space**, or click `[✓ YES, STILL STUDYING!]` within 25 seconds before the siren blasts.
-- **Hourly Check-In Prompts:**
-  - Every **60 minutes**, an engagement modal verifies you haven't abandoned your desk or fallen asleep.
-
-### 4. Episode-Based Distraction Tracking & Instant Audio Trigger
-- **Accurate Counting:** Counts distraction **episodes/events** rather than loop clock ticks. Switching to YouTube and staying there for 20 seconds counts as **1 distraction**, not 40.
-- **Focus tracking:** The app polls the foreground window every 100 ms and reads browser addresses in the background. While checking a new browser tab, it pauses distraction alarms until it can classify the tab.
-
-### 4. Floating On-Screen HUD Overlay
-- A sleek, draggable floating HUD stays anchored on top of your screen:
-  - ⏱️ **Elapsed Study Time** (`01:23:45`)
-  - ⏳ **Time Until Unlock** (`Locked: 00:36:15`)
-  - 🟢 **Focus Status** (`🟢 Focused: NotebookLM`)
-  - 🚨 **Distraction Warning** (Turns flashing red if distracted)
-
-### 5. Emergency Override Safeguard
-If you face a genuine computer emergency before your session ends, click the `⚠️` icon on the HUD. To unlock early, you are required to type the anti-cheat pledge:
-`"I AM BREAKING MY STUDY PROMISE"`
-This psychological barrier prevents impulsive tab-switching while guaranteeing you are never locked out of your PC.
+```powershell
+cargo +stable-x86_64-pc-windows-msvc run --locked --manifest-path src-tauri/Cargo.toml
+```
 
 ---
 
-## 🛠️ Configuration (`config.json`)
-You can tweak settings anytime in `config.json`:
-- `blast_max_volume`: Force 100% volume on alarm (`true`/`false`)
-- `new_tab_grace_seconds`: Grace period when opening a new tab before navigating (`6.0`s)
-- `hourly_checkin_interval_minutes`: Check-in frequency (`60` mins)
-- `allowed_site_keywords`: Additional whitelisted keywords
+*The original Python/Tkinter version is preserved in the [`legacy-python`](https://github.com/SanjaySK13/Focuzzer/tree/legacy-python) branch.*

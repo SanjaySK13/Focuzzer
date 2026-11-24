@@ -1,6 +1,3 @@
-__pycache__/
-*.py[cod]
-*$py.class
-.vscode/
-.idea/
-.focuzzer-private-exit
+src-tauri/target/
+src-tauri/gen/
+/focuzzer-rusted*.exe
