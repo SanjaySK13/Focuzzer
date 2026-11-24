@@ -5,18 +5,24 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Focuzzer</title>
   <link rel="stylesheet" href="style.css">
+  <script defer src="vendor/chart.umd.min.js"></script>
   <script defer src="app.js"></script>
 </head>
 <body>
 <main id="dashboard" hidden>
   <header class="masthead">
     <a class="brand" href="index.html" aria-label="Focuzzer home"><span class="brand-mark" aria-hidden="true">✦</span> Focuzzer</a>
+    <nav class="view-nav" aria-label="Dashboard views">
+      <button id="nav-home" type="button" aria-current="page">Home</button>
+      <button id="nav-analytics" type="button">Analytics</button>
+    </nav>
     <nav class="header-actions" aria-label="App information and sound">
       <button id="show-help" class="quiet-button" type="button">How this app works</button>
       <button id="show-about" class="quiet-button" type="button">About</button>
       <button id="sound" class="quiet-button" type="button" aria-pressed="true">Sound on</button>
     </nav>
   </header>
+  <section id="home-view" aria-label="Home">
   <div class="intro"><h1>Make time for focus.</h1><p>Set a goal, start a timer, and settle into your work.</p></div>
   <div class="layout">
     <form id="session-form" class="surface setup">
@@ -35,13 +41,14 @@
       <p id="duration-help" class="field-note">Drag or scroll to adjust. The arrow keys change the duration by one minute.</p>
       <div class="allowed-fields">
         <div>
-          <label for="allowed-apps">Allowed apps</label>
-          <input id="allowed-apps" maxlength="2000" placeholder="System apps, ChatGPT app, Word">
+          <label>Allowed apps</label>
+          <div id="app-bubbles" class="bubble-picker" role="group" aria-label="Allowed apps"></div>
+          <input id="allowed-apps" type="hidden" name="allowedApps">
         </div>
         <div id="allowed-websites-field">
-          <label for="sites">Allowed websites</label>
-          <input id="sites" name="sites" maxlength="2000" placeholder="Gemini, Notebook LM, WhatsApp" aria-describedby="site-defaults">
-          <p id="site-defaults" class="field-note">Separate names or links with commas.</p>
+          <label>Allowed websites</label>
+          <div id="site-bubbles" class="bubble-picker" role="group" aria-label="Allowed websites"></div>
+          <input id="sites" type="hidden" name="sites">
         </div>
       </div>
       <details class="advanced-rules">
@@ -50,10 +57,11 @@
         <select id="site-mode"><option value="allowlist">Allowlist only</option><option value="blocklist">Blocklist only</option></select>
         <label for="blocked-sites">Blocked websites</label>
         <input id="blocked-sites" name="blockedSites" maxlength="2000" placeholder="youtube.com, x.com">
+        <label><input id="warn-unreadable-browser" type="checkbox" checked> Warn if a browser address can’t be verified</label>
       </details>
       <button class="primary" type="submit" id="start">
         <span>Start challenge</span><span aria-hidden="true">↗</span>
-        <span class="start-sparkles" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+        <span class="start-sparkles" aria-hidden="true"><i></i><i></i><i></i></span>
       </button>
       <p id="dashboard-status" role="status" hidden></p>
     </form>
@@ -61,6 +69,7 @@
       <section class="surface preview">
         <div><h2>Floating pill</h2><p>Hover to see session details.</p></div>
         <div class="preview-stage" aria-hidden="true"><div id="sample" class="sample">
+          <div class="sample-fill" aria-hidden="true"></div>
           <span class="orb">✦</span><span class="sample-digits">25:00</span>
         </div></div>
         <div class="segmented" id="styles" aria-label="Pill style">
@@ -71,6 +80,45 @@
       <section class="surface history"><h2>Recent sessions</h2><ul id="history"></ul></section>
     </div>
   </div>
+  </section>
+  <section id="analytics-view" aria-labelledby="analytics-title" hidden>
+    <div class="intro"><h1 id="analytics-title">Study analytics</h1><p>See how much you studied each day and when distractions added up.</p></div>
+    <section class="surface analytics-card" aria-labelledby="chart-title">
+      <div class="analytics-heading">
+        <div><h2 id="chart-title">Daily activity</h2><p id="chart-range"></p></div>
+        <div class="view-nav chart-range-controls" aria-label="Chart date range">
+          <button id="chart-week" type="button" aria-pressed="true">7 days</button>
+          <button id="chart-fortnight" type="button" aria-pressed="false">14 days</button>
+        </div>
+      </div>
+      <div id="chart-totals" class="chart-totals"></div>
+      <div class="chart-legend"><span>Study time</span><span>Distractions</span></div>
+      <div class="chart-scroll">
+        <div class="study-chart">
+          <canvas id="study-chart" tabindex="0" aria-label="Daily study time and distractions. Use the left and right arrow keys to select a date."></canvas>
+        </div>
+      </div>
+      <p id="analytics-note" class="field-note" hidden></p>
+      <p id="analytics-status" role="status" hidden></p>
+    </section>
+    <section class="surface analytics-card chart-detail" aria-labelledby="chart-day">
+      <h2 id="chart-day"></h2>
+      <p id="chart-day-summary" aria-live="polite"></p>
+      <ul id="chart-sessions"></ul>
+    </section>
+  </section>
+  <dialog id="rename-dialog" aria-labelledby="rename-title">
+    <form id="rename-form">
+      <h2 id="rename-title">Rename session</h2>
+      <label for="rename-goal">Session name</label>
+      <input id="rename-goal" maxlength="100" required>
+      <p id="rename-status" role="status" hidden></p>
+      <div class="rename-actions">
+        <button id="rename-cancel" class="quiet-button" type="button">Cancel</button>
+        <button id="rename-save" class="primary" type="submit">Save name</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="dashboard-info" aria-labelledby="dashboard-info-title">
     <h2 id="dashboard-info-title"></h2>
     <section id="help-content" hidden>
@@ -109,7 +157,7 @@
     <p>Type the code exactly as shown to quit early.</p>
     <code id="quit-code"></code>
     <label for="quit-input">Quit code</label>
-    <input id="quit-input" type="password" autocomplete="off" spellcheck="false" maxlength="128" required>
+    <input id="quit-input" type="text" autocomplete="off" spellcheck="false" maxlength="128" required placeholder="Type the code here">
     <p id="quit-status" role="status" hidden></p>
     <div class="quit-actions">
       <button id="quit-cancel" type="button">Keep studying</button>

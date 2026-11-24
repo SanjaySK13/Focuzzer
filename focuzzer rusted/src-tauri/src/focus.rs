@@ -1,4 +1,7 @@
-use crate::{CheckIn, Session, CHECK_IN_GRACE};
+use super::{
+    alarm_volume::{self, Volume},
+    CheckIn, Session, CHECK_IN_GRACE,
+};
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -7,15 +10,11 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use windows::{
-    core::PWSTR,
+    core::{w, PWSTR},
     Win32::{
         Foundation::{CloseHandle, HWND, RECT},
-        Media::Audio::{
-            eConsole, eRender, Endpoints::IAudioEndpointVolume, IMMDeviceEnumerator,
-            MMDeviceEnumerator,
-        },
         System::{
             Com::{
                 CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
@@ -29,22 +28,13 @@ use windows::{
         UI::{
             Accessibility::*,
             WindowsAndMessaging::{
-                GetAncestor, GetForegroundWindow, GetWindowRect, GetWindowTextW,
-                GetWindowThreadProcessId, GA_ROOTOWNER,
+                FindWindowExW, GetAncestor, GetClassNameW, GetForegroundWindow, GetWindowRect,
+                GetWindowTextW, GetWindowThreadProcessId, SetWindowPos, GA_ROOTOWNER, HWND_TOPMOST,
+                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
             },
         },
     },
 };
-
-pub const DEFAULT_SITES: [&str; 7] = [
-    "notebooklm.google.com",
-    "notebooklm.google",
-    "gemini.google.com",
-    "chatgpt.com",
-    "chat.openai.com",
-    "whatsapp.com",
-    "web.whatsapp.com",
-];
 
 pub fn host(value: &str) -> Option<String> {
     let value = value.trim();
@@ -105,6 +95,13 @@ fn service_domains(value: &str) -> Option<&'static [&'static str]> {
         .as_deref()
         .unwrap_or(&lower)
         .trim_start_matches("www.");
+    match candidate {
+        "notebooklm.google.com" | "notebooklm.google" | "notebook.google.com" => {
+            return Some(&["notebooklm.google.com", "notebooklm.google"]);
+        }
+        "chat.openai.com" => return Some(&["chatgpt.com", "chat.openai.com"]),
+        _ => {}
+    }
     let key = friendly_name(candidate.strip_suffix(".com").unwrap_or(candidate));
     [
         ("gemini", &["gemini.google.com"][..]),
@@ -116,6 +113,7 @@ fn service_domains(value: &str) -> Option<&'static [&'static str]> {
         ("chatgpt", &["chatgpt.com", "chat.openai.com"][..]),
         ("gmeet", &["meet.google.com"][..]),
         ("googlemeet", &["meet.google.com"][..]),
+        ("discord", &["discord.com"][..]),
     ]
     .into_iter()
     .find(|(name, _)| *name == key || (name.len() >= 6 && one_edit(name, &key)))
@@ -136,9 +134,8 @@ pub fn website_rules(input: &str) -> Result<Vec<String>, String> {
                 if let Some(domains) = service_domains(value) {
                     rules.extend(domains.iter().map(|domain| (*domain).to_owned()));
                 } else {
-                    let domain = host(value).ok_or_else(|| {
-                        format!("Try a website name or full domain for “{value}”.")
-                    })?;
+                    let domain = allowed_website_rule(value)
+                        .map_err(|_| format!("Try a website name or full domain for “{value}”."))?;
                     rules.push(domain.trim_start_matches("www.").to_owned());
                 }
             }
@@ -150,35 +147,123 @@ pub fn website_rules(input: &str) -> Result<Vec<String>, String> {
 }
 
 pub fn app_name(value: &str) -> String {
+    let value = std::path::Path::new(value)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(value);
     let value = value.to_ascii_lowercase();
-    let name = friendly_name(value.trim_end_matches(".exe"));
+    let stripped = value.strip_suffix(".exe").unwrap_or(&value);
+    let name = friendly_name(stripped);
     match name.as_str() {
         "chatgptapp" | "openaichatgpt" => "chatgpt".into(),
         "visualstudiocode" | "vscode" => "code".into(),
         "word" | "microsoftword" => "winword".into(),
         "microsoftexcel" => "excel".into(),
         "powerpoint" | "microsoftpowerpoint" => "powerpnt".into(),
+        "discordapp" => "discord".into(),
         _ => name,
     }
 }
 
-fn should_block(host: &str, run: &crate::Running) -> bool {
-    run.blocked_rules
-        .iter()
-        .any(|rule| domain_matches(host, rule))
-        || (!run.plan.blocklist_mode
-            && !DEFAULT_SITES
-                .iter()
-                .copied()
-                .chain(run.rules.iter().map(String::as_str))
-                .any(|rule| domain_matches(host, rule)))
+pub fn allowed_app_rule(value: &str) -> Result<String, String> {
+    let value = value.trim().trim_matches('"');
+    let key = app_name(value);
+    if key == "systemapps" || key == "windowsutilities" {
+        return Ok("system apps".into());
+    }
+    if desktop_allowed(&key, &[])
+        || matches!(key.as_str(), "chatgpt" | "discord" | "spotify" | "codex")
+    {
+        return Ok(key);
+    }
+    let path = std::path::Path::new(value);
+    let executable = if path.is_absolute()
+        && path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
+        && path.is_file()
+    {
+        Some(value.to_owned())
+    } else if value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+        && !value.is_empty()
+    {
+        let filename = if value.to_ascii_lowercase().ends_with(".exe") {
+            value.to_owned()
+        } else {
+            format!("{value}.exe")
+        };
+        std::env::var_os("PATH").and_then(|paths| {
+            std::env::split_paths(&paths)
+                .filter(|dir| dir.is_absolute())
+                .map(|dir| dir.join(&filename))
+                .find(|path| path.is_file())
+                .map(|path| path.to_string_lossy().into_owned())
+        })
+    } else {
+        None
+    };
+    executable.filter(|name| !name.is_empty()).ok_or_else(|| {
+        "Choose a listed app, or paste the full path to its installed .exe file.".into()
+    })
+}
+
+pub fn allowed_website_rule(value: &str) -> Result<String, String> {
+    if let Some(domain) = host(value) {
+        match domain.as_str() {
+            "web.whatsapp.com" => return Ok("whatsapp.com".into()),
+            "notebook.google.com" => return Ok("notebooklm.google.com".into()),
+            _ => {}
+        }
+    }
+    if let Some(domains) = service_domains(value.trim()) {
+        return Ok(domains[0].to_owned());
+    }
+    host(value)
+        .filter(|name| {
+            name == "localhost"
+                || name.parse::<std::net::IpAddr>().is_ok()
+                || (name.contains('.')
+                    && name.len() <= 253
+                    && name.rsplit('.').next().is_some_and(|part| {
+                        part.len() >= 2 && part.bytes().any(|b| b.is_ascii_alphabetic())
+                    })
+                    && name.split('.').all(|part| {
+                        !part.is_empty()
+                            && part.len() <= 63
+                            && !part.starts_with('-')
+                            && !part.ends_with('-')
+                            && part.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                    }))
+        })
+        .map(|name| name.trim_start_matches("www.").to_owned())
+        .ok_or_else(|| {
+            "Choose a listed website, or enter a full domain such as example.edu.".into()
+        })
+}
+
+fn should_block(host: &str, allowed: &[String], blocked: &[String], blocklist_mode: bool) -> bool {
+    blocked.iter().any(|rule| domain_matches(host, rule))
+        || (!blocklist_mode && !allowed.iter().any(|rule| domain_matches(host, rule)))
 }
 
 enum Reading {
     OwnWindow,
-    Desktop { exe: String, title: Option<String> },
-    Unknown(Option<String>),
-    Site { host: String, title: Option<String> },
+    Desktop {
+        exe: String,
+        title: Option<String>,
+    },
+    Unknown,
+    UnreadableBrowser {
+        exe: String,
+        title: Option<String>,
+        listed: bool,
+    },
+    Site {
+        host: String,
+        title: Option<String>,
+    },
     NewTab,
     Editing,
     History,
@@ -233,54 +318,40 @@ fn foreground(automation: Option<&IUIAutomation>, cache: &mut AddressCache) -> R
     unsafe {
         let foreground = GetForegroundWindow();
         if foreground.0.is_null() {
-            return Reading::Unknown(None);
+            return Reading::Unknown;
         }
         let owner = GetAncestor(foreground, GA_ROOTOWNER);
         let hwnd = if owner.0.is_null() { foreground } else { owner };
-        let mut pid = 0;
-        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        let pid = window_process_id(hwnd);
         if pid == std::process::id() {
             return Reading::OwnWindow;
         }
-        let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
-            return Reading::Unknown(None);
+        let Some(mut exe) = process_name(pid) else {
+            return Reading::Unknown;
         };
-        let mut path = [0u16; 1024];
-        let mut length = path.len() as u32;
-        let result = QueryFullProcessImageNameW(
-            process,
-            PROCESS_NAME_WIN32,
-            PWSTR(path.as_mut_ptr()),
-            &mut length,
-        );
-        let _ = CloseHandle(process);
-        if result.is_err() {
-            return Reading::Unknown(None);
-        }
-        let name = String::from_utf16_lossy(&path[..length as usize]).to_ascii_lowercase();
-        let exe = name.rsplit('\\').next().unwrap_or(&name);
-        if !matches!(
-            exe,
-            "brave.exe"
-                | "chrome.exe"
-                | "msedge.exe"
-                | "firefox.exe"
-                | "opera.exe"
-                | "opera_gx.exe"
-                | "vivaldi.exe"
-                | "waterfox.exe"
-                | "arc.exe"
-                | "chromium.exe"
-        ) {
-            return Reading::Desktop {
-                exe: exe.trim_end_matches(".exe").to_owned(),
-                title: tab_title(hwnd),
-            };
+        if exe == "applicationframehost" {
+            let mut child = None;
+            while let Ok(next) =
+                FindWindowExW(Some(hwnd), child, w!("Windows.UI.Core.CoreWindow"), None)
+            {
+                child = Some(next);
+                let child_pid = window_process_id(next);
+                if child_pid != pid {
+                    if let Some(name) = process_name(child_pid) {
+                        exe = name;
+                        break;
+                    }
+                }
+            }
         }
         let title = tab_title(hwnd);
+        let listed = is_browser(&exe);
+        if !listed && (desktop_allowed(&exe, &[]) || !browser_window_class(hwnd)) {
+            return Reading::Desktop { exe, title };
+        }
         let result = automation.and_then(|uia| address(uia, hwnd, cache));
         if GetForegroundWindow() != foreground {
-            return Reading::Unknown(None);
+            return Reading::Unknown;
         }
         let (value, editing) = result
             .as_ref()
@@ -291,10 +362,68 @@ fn foreground(automation: Option<&IUIAutomation>, cache: &mut AddressCache) -> R
             None
         };
         if GetForegroundWindow() != foreground {
-            return Reading::Unknown(None);
+            return Reading::Unknown;
         }
-        classify_address(value, editing, committed.as_deref(), title)
+        match classify_address(value, editing, committed.as_deref(), title.clone()) {
+            Reading::Unknown => Reading::UnreadableBrowser { exe, title, listed },
+            reading => reading,
+        }
     }
+}
+
+unsafe fn window_process_id(hwnd: HWND) -> u32 {
+    let mut pid = 0;
+    GetWindowThreadProcessId(hwnd, Some(&mut pid));
+    pid
+}
+
+unsafe fn process_name(pid: u32) -> Option<String> {
+    let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+    let mut path = [0u16; 1024];
+    let mut length = path.len() as u32;
+    let result = QueryFullProcessImageNameW(
+        process,
+        PROCESS_NAME_WIN32,
+        PWSTR(path.as_mut_ptr()),
+        &mut length,
+    );
+    let _ = CloseHandle(process);
+    result.ok()?;
+    let path = String::from_utf16_lossy(&path[..length as usize]);
+    let name = path.rsplit('\\').next()?.to_ascii_lowercase();
+    Some(name.strip_suffix(".exe").unwrap_or(&name).to_owned())
+}
+
+fn is_browser(exe: &str) -> bool {
+    matches!(
+        exe,
+        "brave"
+            | "chrome"
+            | "msedge"
+            | "firefox"
+            | "opera"
+            | "opera_gx"
+            | "vivaldi"
+            | "waterfox"
+            | "arc"
+            | "chromium"
+            | "zen"
+            | "comet"
+            | "librewolf"
+            | "floorp"
+            | "thorium"
+            | "cromite"
+            | "browser"
+    )
+}
+
+unsafe fn browser_window_class(hwnd: HWND) -> bool {
+    let mut name = [0; 128];
+    let length = GetClassNameW(hwnd, &mut name).max(0) as usize;
+    matches!(
+        String::from_utf16_lossy(&name[..length]).as_str(),
+        "Chrome_WidgetWin_1" | "MozillaWindowClass"
+    )
 }
 
 fn classify_address(
@@ -340,7 +469,7 @@ fn classify_address(
     ) {
         Reading::History
     } else {
-        Reading::Unknown(title)
+        Reading::Unknown
     }
 }
 
@@ -371,6 +500,9 @@ fn committed_document(automation: &IUIAutomation, hwnd: HWND) -> Option<String> 
 }
 
 fn desktop_allowed(exe: &str, custom: &[String]) -> bool {
+    if exe == "applicationframehost" {
+        return false;
+    }
     custom.iter().any(|name| name == &app_name(exe))
         || matches!(
             exe,
@@ -384,7 +516,6 @@ fn desktop_allowed(exe: &str, custom: &[String]) -> bool {
                 | "systemsettingsbroker"
                 | "taskmgr"
                 | "lockapp"
-                | "applicationframehost"
                 | "textinputhost"
                 | "snippingtool"
                 | "screenclippinghost"
@@ -419,6 +550,7 @@ fn desktop_allowed(exe: &str, custom: &[String]) -> bool {
                 | "anki"
                 | "zotero"
                 | "whatsapp"
+                | "discord"
         )
 }
 
@@ -443,6 +575,8 @@ unsafe fn address(
         .ok()?;
     let candidates = window.FindAll(TreeScope_Descendants, &edits).ok()?;
     let walker = automation.ControlViewWalker().ok()?;
+    let mut fallback = None;
+    let mut ambiguous = false;
     for index in 0..candidates.Length().ok()? {
         let Ok(edit) = candidates.GetElement(index) else {
             continue;
@@ -455,48 +589,57 @@ unsafe fn address(
             .CurrentName()
             .map(|name| name.to_string().to_ascii_lowercase())
             .unwrap_or_default();
-        if !matches!(id.as_str(), "urlbar-input" | "addresseditbox" | "omnibox")
-            && ![
-                "address bar",
-                "address and search bar",
-                "enter address",
-                "enter an address",
-                "type a url",
-            ]
-            .iter()
-            .any(|part| name.contains(part))
-        {
-            continue;
-        }
+        let named_address = matches!(
+            id.as_str(),
+            "urlbar-input" | "urlbar" | "addresseditbox" | "omnibox" | "addressbar"
+        ) || [
+            "address bar",
+            "address and search bar",
+            "enter address",
+            "enter an address",
+            "type a url",
+        ]
+        .iter()
+        .any(|part| name.contains(part));
         let mut parent = walker.GetParentElement(&edit).ok();
         let mut is_page = false;
+        let mut is_toolbar = false;
         while let Some(element) = parent {
-            if element.CurrentControlType().ok() == Some(UIA_DocumentControlTypeId) {
+            let control = element.CurrentControlType().ok();
+            if control == Some(UIA_DocumentControlTypeId) {
                 is_page = true;
                 break;
             }
+            is_toolbar |= control == Some(UIA_ToolBarControlTypeId);
             parent = walker.GetParentElement(&element).ok();
         }
-        if is_page {
+        if is_page || !(named_address || is_toolbar) {
             continue;
         }
         if let Ok(pattern) =
             edit.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
         {
             if let Ok(value) = pattern.CurrentValue() {
-                let focused = edit.CurrentHasKeyboardFocus().ok()?.as_bool();
-                *cache = Some((hwnd, edit, pattern));
-                return Some((value.to_string().trim().to_owned(), focused));
+                let Ok(focus) = edit.CurrentHasKeyboardFocus() else {
+                    continue;
+                };
+                let focused = focus.as_bool();
+                let value = value.to_string().trim().to_owned();
+                if named_address {
+                    *cache = Some((hwnd, edit, pattern));
+                    return Some((value, focused));
+                }
+                if !focused && value.contains("://") && host(&value).is_some() {
+                    ambiguous |= fallback.replace((value, false)).is_some();
+                }
             }
         }
     }
-    None
-}
-
-struct Volume {
-    endpoint: IAudioEndpointVolume,
-    level: f32,
-    muted: bool,
+    if ambiguous {
+        None
+    } else {
+        fallback
+    }
 }
 
 fn foreground_bounds() -> Option<RECT> {
@@ -522,36 +665,6 @@ fn size_distraction_banner(window: &tauri::WebviewWindow, rect: RECT) {
         banner_height as u32,
     ));
 }
-impl Volume {
-    unsafe fn raise() -> windows::core::Result<Self> {
-        let enumerator: IMMDeviceEnumerator =
-            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
-        let endpoint: IAudioEndpointVolume = enumerator
-            .GetDefaultAudioEndpoint(eRender, eConsole)?
-            .Activate(CLSCTX_ALL, None)?;
-        let volume = Self {
-            level: endpoint.GetMasterVolumeLevelScalar()?,
-            muted: endpoint.GetMute()?.as_bool(),
-            endpoint,
-        };
-        volume
-            .endpoint
-            .SetMasterVolumeLevelScalar(1.0, std::ptr::null())?;
-        volume.endpoint.SetMute(false, std::ptr::null())?;
-        Ok(volume)
-    }
-}
-impl Drop for Volume {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = self
-                .endpoint
-                .SetMasterVolumeLevelScalar(self.level, std::ptr::null());
-            let _ = self.endpoint.SetMute(self.muted, std::ptr::null());
-        }
-    }
-}
-
 pub fn start(
     app: AppHandle,
     active: Arc<AtomicBool>,
@@ -559,30 +672,65 @@ pub fn start(
 ) -> thread::JoinHandle<()> {
     let alarm = active.clone();
     let shutdown = stop.clone();
+    let journal = app
+        .path()
+        .app_local_data_dir()
+        .ok()
+        .map(|dir| dir.join("alarm-volume.json"));
     let audio = thread::spawn(move || unsafe {
-        let initialized = CoInitializeEx(None, COINIT_MULTITHREADED).is_ok();
-        let mut volume = None;
-        let mut sounding = false;
-        let mut high = true;
-        while !shutdown.load(Ordering::Acquire) {
-            if alarm.load(Ordering::Acquire) {
-                if !sounding {
-                    volume = Volume::raise().ok();
-                    sounding = true;
+        let beep_alarm = alarm.clone();
+        let beep_shutdown = shutdown.clone();
+        let beeper = thread::spawn(move || {
+            let mut high = true;
+            while !beep_shutdown.load(Ordering::Acquire) {
+                if beep_alarm.load(Ordering::Acquire) {
+                    let _ = Beep(if high { 2500 } else { 1850 }, 160);
+                    high = !high;
+                    thread::sleep(Duration::from_millis(65));
+                } else {
+                    thread::sleep(Duration::from_millis(35));
                 }
-                let _ = Beep(if high { 2500 } else { 1850 }, 160);
-                high = !high;
-                thread::sleep(Duration::from_millis(65));
+            }
+        });
+        let initialized = CoInitializeEx(None, COINIT_MULTITHREADED).is_ok();
+        let mut volume: Option<Volume> = None;
+        let mut next_attempt = Instant::now();
+        let mut was_alarming = false;
+        while !shutdown.load(Ordering::Acquire) {
+            let alarming = alarm.load(Ordering::Acquire);
+            if alarming != was_alarming {
+                next_attempt = Instant::now();
+                was_alarming = alarming;
+            }
+            if alarming {
+                if volume
+                    .as_ref()
+                    .is_some_and(|current| current.enforce().is_err())
+                {
+                    volume.take();
+                }
+                if volume.is_none() && Instant::now() >= next_attempt {
+                    volume = journal.as_deref().and_then(|path| Volume::begin(path).ok());
+                    if volume.is_none() {
+                        next_attempt = Instant::now() + Duration::from_secs(1);
+                    }
+                }
             } else {
                 volume.take();
-                sounding = false;
-                thread::sleep(Duration::from_millis(35));
+                if Instant::now() >= next_attempt {
+                    if let Some(path) = journal.as_deref() {
+                        let _ = alarm_volume::recover(path);
+                    }
+                    next_attempt = Instant::now() + Duration::from_secs(1);
+                }
             }
+            thread::sleep(Duration::from_millis(35));
         }
         drop(volume);
         if initialized {
             CoUninitialize();
         }
+        let _ = beeper.join();
     });
     thread::spawn(move || unsafe {
         let initialized = CoInitializeEx(None, COINIT_MULTITHREADED).is_ok();
@@ -605,6 +753,7 @@ pub fn start(
                     Reading::Site { .. }
                         | Reading::History
                         | Reading::Desktop { .. }
+                        | Reading::UnreadableBrowser { .. }
                         | Reading::NewTab
                 )
             );
@@ -616,11 +765,23 @@ pub fn start(
                     Some(run.started) == running
                         && run.started.elapsed().as_secs() < (run.plan.minutes * 60) as u64
                 }) {
+                    if !matches!(
+                        &reading,
+                        Some(Reading::UnreadableBrowser { .. } | Reading::Unknown)
+                    ) {
+                        run.unreadable_since = None;
+                    }
                     match reading {
                         Some(Reading::Site { host, title }) => {
                             run.new_tab_since = None;
                             run.active_tab = title.or_else(|| Some(host.clone()));
-                            run.blocked_site = should_block(&host, run).then_some(host);
+                            run.blocked_site = should_block(
+                                &host,
+                                &run.rules,
+                                &run.blocked_rules,
+                                run.plan.blocklist_mode,
+                            )
+                            .then_some(host);
                             if run.blocked_site.is_none() {
                                 run.in_distraction = false;
                             }
@@ -650,10 +811,23 @@ pub fn start(
                                 run.in_distraction = false;
                             }
                         }
-                        Some(Reading::Unknown(title)) => {
-                            run.active_tab = title.map(|_| "Address unavailable".to_owned());
+                        Some(Reading::UnreadableBrowser { exe, title, listed }) => {
+                            run.active_tab =
+                                title.or_else(|| Some(format!("Address unavailable · {exe}")));
                             run.new_tab_since = None;
-                            run.blocked_site = None;
+                            let since = run.unreadable_since.get_or_insert_with(Instant::now);
+                            let warn = run.plan.warn_unreadable_browser
+                                && (listed || !desktop_allowed(&exe, &run.allowed_apps));
+                            run.blocked_site = if warn {
+                                (since.elapsed() >= Duration::from_secs(2))
+                                    .then(|| format!("Could not verify browser address: {exe}"))
+                            } else {
+                                (!listed && !desktop_allowed(&exe, &run.allowed_apps))
+                                    .then(|| format!("Desktop app: {exe}.exe"))
+                            };
+                            if run.blocked_site.is_none() {
+                                run.in_distraction = false;
+                            }
                         }
                         _ => {}
                     }
@@ -667,6 +841,7 @@ pub fn start(
                             >= Duration::from_secs(run.plan.minutes as u64 * 30)
                     {
                         run.check_in = CheckIn::Prompted(Instant::now());
+                        let _ = app.emit("checkin-start", ());
                     }
                     if let CheckIn::Prompted(shown) = run.check_in {
                         reminder_pending = true;
@@ -721,6 +896,28 @@ pub fn start(
                 });
             }
             thread::sleep(Duration::from_millis(90));
+            // Re-assert pill always-on-top every ~2 seconds to prevent other apps overriding it
+            static TOPMOST_COUNTER: std::sync::atomic::AtomicU32 =
+                std::sync::atomic::AtomicU32::new(0);
+            let count = TOPMOST_COUNTER.fetch_add(1, Ordering::Relaxed);
+            if count % 22 == 0 {
+                // roughly every 2 seconds (22 * 90ms)
+                if let Some(pill) = app.get_webview_window("pill") {
+                    if pill.is_visible().unwrap_or(false) {
+                        if let Ok(hwnd) = pill.hwnd() {
+                            let _ = SetWindowPos(
+                                hwnd,
+                                Some(HWND_TOPMOST),
+                                0,
+                                0,
+                                0,
+                                0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                            );
+                        }
+                    }
+                }
+            }
         }
         drop(automation);
         if initialized {
@@ -747,6 +944,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn allow_items_reject_junk_and_canonicalize_valid_entries() {
+        assert!(allowed_app_rule("sonn").is_err());
+        assert!(allowed_app_rule("random-application-4681.exe").is_err());
+        assert_eq!(allowed_app_rule("Spotify.exe").unwrap(), "spotify");
+        assert_eq!(allowed_app_rule("ChatGPT App").unwrap(), "chatgpt");
+        let installed = std::env::current_exe().unwrap();
+        assert_eq!(
+            allowed_app_rule(installed.to_str().unwrap()).unwrap(),
+            installed.to_str().unwrap()
+        );
+        assert!(allowed_website_rule("random text").is_err());
+        assert!(allowed_website_rule("sonn").is_err());
+        assert!(allowed_website_rule("invalid..com").is_err());
+        assert_eq!(
+            allowed_website_rule("https://www.example.edu/path").unwrap(),
+            "example.edu"
+        );
+        assert_eq!(
+            allowed_website_rule("notebook.google.com").unwrap(),
+            "notebooklm.google.com"
+        );
+        assert_eq!(allowed_website_rule("whatsap.com").unwrap(), "whatsapp.com");
+    }
+
+    #[test]
     fn friendly_inputs_resolve_to_canonical_rules() {
         let rules =
             website_rules("gemini, Notebook LM, whatsap.com, gmeet.com, example.edu").unwrap();
@@ -760,8 +982,33 @@ mod tests {
     }
 
     #[test]
+    fn allowed_website_presets_require_selection() {
+        let allowed = website_rules("whatsap.com, chatgpt.com").unwrap();
+        let blocked = vec!["whatsapp.com".into()];
+        for host in ["whatsapp.com", "web.whatsapp.com"] {
+            assert!(should_block(host, &[], &[], false));
+            assert!(!should_block(host, &allowed, &[], false));
+            assert!(should_block(host, &allowed, &blocked, false));
+            assert!(!should_block(host, &[], &[], true));
+        }
+        assert!(!should_block("chat.openai.com", &allowed, &[], false));
+        assert!(should_block(
+            "whatsapp.com.example.com",
+            &allowed,
+            &[],
+            false
+        ));
+    }
+
+    #[test]
     fn standard_study_and_shell_apps_are_allowed() {
         assert!(desktop_allowed("explorer", &[]));
+        assert!(!desktop_allowed("applicationframehost", &[]));
+        assert!(!desktop_allowed(
+            "applicationframehost",
+            &["applicationframehost".into()]
+        ));
+        assert!(is_browser("zen") && is_browser("comet"));
         assert!(desktop_allowed("winword", &[]));
         assert!(!desktop_allowed("codex", &[]));
         assert!(desktop_allowed("codex", &["codex".into()]));
